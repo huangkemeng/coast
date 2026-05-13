@@ -13,6 +13,7 @@ export const badgeVariants = cva(
         success: 'border-transparent bg-success text-white',
         warning: 'border-transparent bg-warning text-black',
         error: 'border-transparent bg-error text-white',
+        destructive: 'border-transparent bg-error text-white',
         outline: 'text-text-primary border-border',
         pending: 'border-transparent bg-slate-500 text-white',
         dev: 'border-transparent bg-blue-500 text-white',
@@ -20,6 +21,7 @@ export const badgeVariants = cva(
         launched: 'border-transparent bg-emerald-500 text-white',
         rejected: 'border-transparent bg-red-500 text-white',
         paused: 'border-transparent bg-slate-400 text-white',
+        info: 'border-transparent bg-sky-500 text-white',
       },
     },
     defaultVariants: {

@@ -1,54 +1,84 @@
+export enum RequirementStatus {
+  PendingConfirm = 0,
+  Confirmed = 1,
+  PendingQuote = 2,
+  Quoted = 3,
+  PendingDev = 4,
+  InDev = 5,
+  InTest = 6,
+  AcceptedPendingLaunch = 7,
+  Launched = 8,
+}
+
+export enum Priority {
+  Low = 0,
+  Medium = 1,
+  High = 2,
+}
+
+export const RequirementStatusName: Record<RequirementStatus, string> = {
+  [RequirementStatus.PendingConfirm]: '待确认',
+  [RequirementStatus.Confirmed]: '已确认',
+  [RequirementStatus.PendingQuote]: '待报价',
+  [RequirementStatus.Quoted]: '已报价',
+  [RequirementStatus.PendingDev]: '待开发',
+  [RequirementStatus.InDev]: '开发中',
+  [RequirementStatus.InTest]: '测试中',
+  [RequirementStatus.AcceptedPendingLaunch]: '待上线',
+  [RequirementStatus.Launched]: '已上线',
+};
+
+export const PriorityName: Record<Priority, string> = {
+  [Priority.Low]: '低',
+  [Priority.Medium]: '中',
+  [Priority.High]: '高',
+};
+
 export interface Requirement {
   id: number;
   name: string;
   requirementNo: string;
-  projectId: number | null;
+  projectId: number;
   projectName: string | null;
-  followerId: number | null;
+  followerId: number;
   followerName: string | null;
   status: RequirementStatus;
   statusName: string;
-  priority: RequirementPriority;
+  priority: Priority;
   priorityName: string;
   isConfirmed: boolean;
   progress: number;
+  planStartDate: string | null;
+  planTestDate: string | null;
+  planLaunchDate: string | null;
+  actualTestDate: string | null;
+  actualLaunchDate: string | null;
   price: number | null;
-  deadline: string | null;
   docUrl: string | null;
-  version: string | null;
-  content: string | null;
+  remark: string | null;
+  robotId: number | null;
+  robotName: string | null;
+  version: number;
   createdAt: string;
   updatedAt: string;
-}
-
-export enum RequirementStatus {
-  待排期 = 0,
-  开发中 = 1,
-  测试中 = 2,
-  已上线 = 3,
-  已驳回 = 4,
-  已暂停 = 5,
-}
-
-export enum RequirementPriority {
-  普通 = 0,
-  紧急 = 1,
-  非常重要 = 2,
 }
 
 export interface RequirementListItem {
   id: number;
   name: string;
   requirementNo: string;
+  projectId: number;
   projectName: string | null;
+  followerId: number;
   followerName: string | null;
   status: RequirementStatus;
   statusName: string;
-  priority: RequirementPriority;
+  priority: Priority;
   priorityName: string;
   isConfirmed: boolean;
   progress: number;
-  deadline: string | null;
+  planTestDate: string | null;
+  version: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -68,21 +98,36 @@ export interface RequirementTimeline {
 
 export interface CreateRequirementRequest {
   name: string;
-  projectId?: number | null;
-  followerId?: number | null;
-  priority?: number;
-  isConfirmed?: boolean;
-  price?: number | null;
-  deadline?: string | null;
+  requirementNo: string;
+  projectId: number;
+  followerId: number;
+  priority: Priority;
+  planStartDate?: string | null;
+  planTestDate?: string | null;
+  planLaunchDate?: string | null;
   docUrl?: string | null;
-  content?: string;
+  price?: number | null;
+  remark?: string | null;
+  robotId?: number | null;
 }
 
 export interface UpdateRequirementRequest extends CreateRequirementRequest {
-  version?: string;
+  version: number;
 }
 
-export interface ChangeStatusRequest {
+export interface ChangeRequirementStatusRequest {
   status: RequirementStatus;
   remark?: string;
 }
+
+export const StatusTransitions: Record<RequirementStatus, RequirementStatus[]> = {
+  [RequirementStatus.PendingConfirm]: [RequirementStatus.Confirmed],
+  [RequirementStatus.Confirmed]: [RequirementStatus.PendingQuote],
+  [RequirementStatus.PendingQuote]: [RequirementStatus.Quoted],
+  [RequirementStatus.Quoted]: [RequirementStatus.PendingDev],
+  [RequirementStatus.PendingDev]: [RequirementStatus.InDev],
+  [RequirementStatus.InDev]: [RequirementStatus.InTest],
+  [RequirementStatus.InTest]: [RequirementStatus.AcceptedPendingLaunch],
+  [RequirementStatus.AcceptedPendingLaunch]: [RequirementStatus.Launched],
+  [RequirementStatus.Launched]: [],
+};

@@ -13,7 +13,6 @@ export interface ProjectListItem {
   description: string | null;
   requirementCount: number;
   createdAt: string;
-  updatedAt: string;
 }
 
 export interface CreateProjectRequest {

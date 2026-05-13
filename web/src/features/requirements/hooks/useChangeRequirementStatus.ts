@@ -1,17 +1,10 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation } from '@tanstack/react-query';
 import { changeRequirementStatusApi } from '@/api/requirements';
-import type { ChangeStatusRequest } from '@/types/requirement';
+import type { RequirementStatus, ChangeRequirementStatusRequest } from '@/types/requirement';
 
 export const useChangeRequirementStatus = () => {
-  const queryClient = useQueryClient();
-  
   return useMutation({
-    mutationFn: ({ id, data }: { id: number; data: ChangeStatusRequest }) =>
-      changeRequirementStatusApi(id, data),
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['requirement', variables.id] });
-      queryClient.invalidateQueries({ queryKey: ['requirement-timeline', variables.id] });
-      queryClient.invalidateQueries({ queryKey: ['requirements'] });
-    },
+    mutationFn: ({ id, status, remark }: { id: number; status: RequirementStatus; remark?: string }) =>
+      changeRequirementStatusApi(id, { status, remark } as ChangeRequirementStatusRequest),
   });
 };

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { User, LoginRequest } from '@/types/user';
+import type { User, LoginRequest, LoginResponse } from '@/types/user';
 import { loginApi } from '@/api/auth';
 
 interface AuthState {
@@ -27,10 +27,10 @@ export const useAuthStore = create<AuthState>()(
       login: async (credentials: LoginRequest) => {
         set({ isLoading: true, error: null });
         try {
-          const response = await loginApi(credentials);
+          const response: LoginResponse = await loginApi(credentials);
           set({
-            user: response.user,
-            token: response.token,
+            user: null,
+            token: response.accessToken,
             isAuthenticated: true,
             isLoading: false,
           });
@@ -72,5 +72,5 @@ export const useAuthStore = create<AuthState>()(
 
 export const useIsAdmin = () => {
   const user = useAuthStore((state) => state.user);
-  return user?.role === 1;
+  return user?.role === 0;
 };

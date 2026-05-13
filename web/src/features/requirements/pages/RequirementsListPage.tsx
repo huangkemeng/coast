@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/Button';
 import { Pagination } from '@/components/ui/Pagination';
 import { RequirementTable } from '../components/RequirementTable';
-import { RequirementFilters } from '../components/RequirementFilters';
+import { RequirementFilters, RequirementFiltersState } from '../components/RequirementFilters';
 import { LoadingOverlay } from '@/components/common/LoadingOverlay';
 import { EmptyState } from '@/components/common/EmptyState';
 import { ConfirmDialog } from '@/components/common/ConfirmDialog';
@@ -13,19 +13,19 @@ import { usePermission } from '@/stores/permissionStore';
 import { getRequirementsApi, GetRequirementsParams } from '@/api/requirements';
 import { getProjectsApi } from '@/api/projects';
 import { getAllUsersApi } from '@/api/users';
-import { useDeleteRequirement } from '@/features/requirements/hooks';
+import { deleteRequirementApi, changeRequirementStatusApi } from '@/api/requirements';
+import type { RequirementStatus } from '@/types/requirement';
 import { Plus } from 'lucide-react';
-import type { RequirementFilters as RequirementFiltersType } from '@/types/api';
 
 export const RequirementsListPage: React.FC = () => {
   const navigate = useNavigate();
   const { addToast } = useUIStore();
   const { canCreateRequirement, canDeleteRequirement } = usePermission();
-  const deleteRequirement = useDeleteRequirement();
+  const queryClient = useQueryClient();
 
   const [pageIndex, setPageIndex] = useState(1);
   const [pageSize] = useState(10);
-  const [filters, setFilters] = useState<RequirementFiltersType>({});
+  const [filters, setFilters] = useState<RequirementFiltersState>({});
   const [deleteId, setDeleteId] = useState<number | null>(null);
 
   const params: GetRequirementsParams = {
@@ -51,30 +51,51 @@ export const RequirementsListPage: React.FC = () => {
     queryFn: getAllUsersApi,
   });
 
-  const handleFilterChange = (newFilters: RequirementFiltersType) => {
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => deleteRequirementApi(id),
+    onSuccess: () => {
+      addToast({ message: '删除成功', variant: 'success' });
+      queryClient.invalidateQueries({ queryKey: ['requirements'] });
+      setDeleteId(null);
+    },
+    onError: (error: Error) => {
+      addToast({ message: error.message || '删除失败', variant: 'error' });
+    },
+  });
+
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }: { id: number; status: RequirementStatus }) =>
+      changeRequirementStatusApi(id, { status }),
+    onSuccess: () => {
+      addToast({ message: '状态变更成功', variant: 'success' });
+      queryClient.invalidateQueries({ queryKey: ['requirements'] });
+    },
+    onError: (error: Error) => {
+      addToast({ message: error.message || '状态变更失败', variant: 'error' });
+    },
+  });
+
+  const handleFilterChange = (newFilters: RequirementFiltersState) => {
     setFilters(newFilters);
     setPageIndex(1);
   };
 
-  const handleDelete = async () => {
-    if (!deleteId) return;
-    try {
-      await deleteRequirement.mutateAsync(deleteId);
-      addToast({ message: '删除成功', variant: 'success' });
-      setDeleteId(null);
-    } catch {
-      addToast({ message: '删除失败', variant: 'error' });
+  const handleDelete = () => {
+    if (deleteId !== null) {
+      deleteMutation.mutate(deleteId);
     }
   };
 
-  const handleStatusChange = (id: number, status: number) => {
-    navigate(`/requirements/${id}?action=changeStatus&status=${status}`);
+  const handleStatusChange = (id: number, status: RequirementStatus) => {
+    statusMutation.mutate({ id, status });
   };
+
+  const totalPages = data ? Math.ceil(data.totalCount / pageSize) : 0;
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-text-primary">需求管理</h1>
+        <h1 className="text-2xl font-bold">需求管理</h1>
         {canCreateRequirement() && (
           <Button onClick={() => navigate('/requirements/new')}>
             <Plus className="h-4 w-4 mr-2" />
@@ -96,17 +117,13 @@ export const RequirementsListPage: React.FC = () => {
           <EmptyState
             title="暂无需求"
             description="创建您的第一个需求来开始使用系统"
-            action={
-              canCreateRequirement()
-                ? { label: '新建需求', onClick: () => navigate('/requirements/new') }
-                : undefined
-            }
           />
         ) : (
           <>
             <RequirementTable
               data={data.items}
-              onDelete={canDeleteRequirement() ? (id) => setDeleteId(id) : undefined}
+              isLoading={isLoading}
+              onDelete={(id) => canDeleteRequirement() && setDeleteId(id)}
               onStatusChange={handleStatusChange}
             />
             <div className="p-4 border-t border-border">
@@ -114,7 +131,7 @@ export const RequirementsListPage: React.FC = () => {
                 pageIndex={pageIndex}
                 pageSize={pageSize}
                 totalCount={data.totalCount}
-                totalPages={data.totalPages}
+                totalPages={totalPages}
                 onPageChange={setPageIndex}
               />
             </div>
@@ -123,14 +140,13 @@ export const RequirementsListPage: React.FC = () => {
       </div>
 
       <ConfirmDialog
-        open={!!deleteId}
+        open={deleteId !== null}
         onOpenChange={() => setDeleteId(null)}
         title="确认删除"
-        description="删除后无法恢复，确定要删除这条需求吗？"
+        description="删除后无法恢复，确定要删除该需求吗？"
+        onConfirm={handleDelete}
         confirmText="删除"
         variant="destructive"
-        onConfirm={handleDelete}
-        loading={deleteRequirement.isPending}
       />
     </div>
   );

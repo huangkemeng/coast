@@ -1,19 +1,10 @@
 import { apiClient } from './client';
-import type {
-  Project,
-  ProjectListItem,
-  CreateProjectRequest,
-  UpdateProjectRequest,
-} from '@/types/project';
+import type { Project, ProjectListItem, CreateProjectRequest, UpdateProjectRequest } from '@/types/project';
 import type { PageRequest, PageResponse } from '@/types/api';
 
-export interface GetProjectsParams extends PageRequest {
-  keyword?: string;
-}
+export interface GetProjectsParams extends PageRequest {}
 
-export const getProjectsApi = async (
-  params: GetProjectsParams
-): Promise<PageResponse<ProjectListItem>> => {
+export const getProjectsApi = async (params: GetProjectsParams): Promise<PageResponse<ProjectListItem>> => {
   const response = await apiClient.get<PageResponse<ProjectListItem>>('/projects', { params });
   return response.data;
 };
@@ -23,17 +14,12 @@ export const getProjectByIdApi = async (id: number): Promise<Project> => {
   return response.data;
 };
 
-export const createProjectApi = async (
-  data: CreateProjectRequest
-): Promise<Project> => {
-  const response = await apiClient.post<Project>('/projects', data);
+export const createProjectApi = async (data: CreateProjectRequest): Promise<{ id: number }> => {
+  const response = await apiClient.post<{ id: number }>('/projects', data);
   return response.data;
 };
 
-export const updateProjectApi = async (
-  id: number,
-  data: UpdateProjectRequest
-): Promise<Project> => {
+export const updateProjectApi = async (id: number, data: UpdateProjectRequest): Promise<Project> => {
   const response = await apiClient.put<Project>(`/projects/${id}`, data);
   return response.data;
 };

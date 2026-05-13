@@ -18,7 +18,6 @@ export interface RobotListItem {
   isVerified: boolean | null;
   lastVerificationTime: string | null;
   createdAt: string;
-  updatedAt: string;
 }
 
 export interface CreateRobotRequest {

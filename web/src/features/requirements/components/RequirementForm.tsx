@@ -5,7 +5,6 @@ import { Input } from '@/components/ui/Input';
 import { Textarea } from '@/components/ui/Textarea';
 import { Button } from '@/components/ui/Button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/Select';
-import { Checkbox } from '@/components/ui/Checkbox';
 import { FormField } from '@/components/ui/FormField';
 import { getAllUsersApi } from '@/api/users';
 import { getProjectsApi } from '@/api/projects';
@@ -40,41 +39,53 @@ export const RequirementForm: React.FC<RequirementFormProps> = ({
   } = useForm<CreateRequirementRequest>({
     defaultValues: {
       name: initialData?.name || '',
-      projectId: initialData?.projectId ?? undefined,
-      followerId: initialData?.followerId ?? undefined,
+      requirementNo: initialData?.requirementNo || '',
+      projectId: initialData?.projectId || 0,
+      followerId: initialData?.followerId || 0,
       priority: initialData?.priority ?? 0,
-      isConfirmed: initialData?.isConfirmed ?? false,
-      price: initialData?.price ?? undefined,
-      deadline: initialData?.deadline?.split('T')[0] || undefined,
+      planStartDate: initialData?.planStartDate?.split('T')[0] || undefined,
+      planTestDate: initialData?.planTestDate?.split('T')[0] || undefined,
+      planLaunchDate: initialData?.planLaunchDate?.split('T')[0] || undefined,
       docUrl: initialData?.docUrl || undefined,
-      content: initialData?.content || undefined,
+      price: initialData?.price ?? undefined,
+      remark: initialData?.remark || undefined,
+      robotId: initialData?.robotId ?? undefined,
     },
   });
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-      <FormField label="需求名称" required error={errors.name?.message}>
-        <Input
-          {...register('name', { required: '请输入需求名称' })}
-          placeholder="请输入需求名称"
-        />
-      </FormField>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <FormField label="需求名称" required error={errors.name?.message}>
+          <Input
+            {...register('name', { required: '请输入需求名称' })}
+            placeholder="请输入需求名称"
+          />
+        </FormField>
+
+        <FormField label="需求编号" required error={errors.requirementNo?.message}>
+          <Input
+            {...register('requirementNo', { required: '请输入需求编号' })}
+            placeholder="请输入需求编号"
+          />
+        </FormField>
+      </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <FormField label="所属项目">
+        <FormField label="所属项目" required error={errors.projectId?.message}>
           <Controller
             name="projectId"
             control={control}
+            rules={{ required: '请选择项目' }}
             render={({ field }) => (
               <Select
                 value={field.value?.toString() || ''}
-                onValueChange={(value) => field.onChange(value ? parseInt(value) : undefined)}
+                onValueChange={(value) => field.onChange(parseInt(value))}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="请选择项目" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">无</SelectItem>
                   {projects?.items.map((project) => (
                     <SelectItem key={project.id} value={project.id.toString()}>
                       {project.name}
@@ -86,20 +97,20 @@ export const RequirementForm: React.FC<RequirementFormProps> = ({
           />
         </FormField>
 
-        <FormField label="跟进人">
+        <FormField label="跟进人" required error={errors.followerId?.message}>
           <Controller
             name="followerId"
             control={control}
+            rules={{ required: '请选择跟进人' }}
             render={({ field }) => (
               <Select
                 value={field.value?.toString() || ''}
-                onValueChange={(value) => field.onChange(value ? parseInt(value) : undefined)}
+                onValueChange={(value) => field.onChange(parseInt(value))}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="请选择跟进人" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">无</SelectItem>
                   {users?.map((user) => (
                     <SelectItem key={user.id} value={user.id.toString()}>
                       {user.realName}
@@ -112,7 +123,7 @@ export const RequirementForm: React.FC<RequirementFormProps> = ({
         </FormField>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <FormField label="优先级">
           <Controller
             name="priority"
@@ -126,21 +137,29 @@ export const RequirementForm: React.FC<RequirementFormProps> = ({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="0">普通</SelectItem>
-                  <SelectItem value="1">紧急</SelectItem>
-                  <SelectItem value="2">非常重要</SelectItem>
+                  <SelectItem value="0">低</SelectItem>
+                  <SelectItem value="1">中</SelectItem>
+                  <SelectItem value="2">高</SelectItem>
                 </SelectContent>
               </Select>
             )}
           />
         </FormField>
 
-        <FormField label="截止日期">
-          <Input type="date" {...register('deadline')} />
+        <FormField label="计划开始日期">
+          <Input type="date" {...register('planStartDate')} />
+        </FormField>
+
+        <FormField label="计划测试日期">
+          <Input type="date" {...register('planTestDate')} />
         </FormField>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <FormField label="计划上线日期">
+          <Input type="date" {...register('planLaunchDate')} />
+        </FormField>
+
         <FormField label="报价">
           <Input
             type="number"
@@ -149,38 +168,24 @@ export const RequirementForm: React.FC<RequirementFormProps> = ({
             placeholder="请输入报价"
           />
         </FormField>
-
-        <FormField label="文档链接">
-          <Input
-            {...register('docUrl')}
-            placeholder="请输入文档链接"
-          />
-        </FormField>
       </div>
 
-      <FormField label="需求已确认">
-        <Controller
-          name="isConfirmed"
-          control={control}
-          render={({ field }) => (
-            <Checkbox
-              checked={field.value}
-              onChange={field.onChange}
-              label="已确认"
-            />
-          )}
+      <FormField label="需求文档链接">
+        <Input
+          {...register('docUrl')}
+          placeholder="请输入文档链接"
         />
       </FormField>
 
-      <FormField label="需求描述">
+      <FormField label="备注">
         <Textarea
-          {...register('content')}
-          placeholder="请输入需求描述"
-          rows={4}
+          {...register('remark')}
+          placeholder="请输入备注信息"
+          rows={3}
         />
       </FormField>
 
-      <div className="flex justify-end gap-4">
+      <div className="flex justify-end gap-4 pt-4">
         <Button type="button" variant="outline" onClick={() => window.history.back()}>
           取消
         </Button>

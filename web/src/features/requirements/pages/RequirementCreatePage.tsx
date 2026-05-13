@@ -13,10 +13,10 @@ export const RequirementCreatePage: React.FC = () => {
 
   const mutation = useMutation({
     mutationFn: (data: CreateRequirementRequest) => createRequirementApi(data),
-    onSuccess: () => {
+    onSuccess: (response) => {
       addToast({ message: '创建成功', variant: 'success' });
       queryClient.invalidateQueries({ queryKey: ['requirements'] });
-      navigate('/requirements');
+      navigate(`/requirements/${response.id}`);
     },
     onError: (error: Error) => {
       addToast({ message: error.message || '创建失败', variant: 'error' });
@@ -30,7 +30,7 @@ export const RequirementCreatePage: React.FC = () => {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-text-primary">新建需求</h1>
+        <h1 className="text-2xl font-bold">新建需求</h1>
         <p className="text-text-muted mt-1">填写需求信息以创建新的需求</p>
       </div>
 

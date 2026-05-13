@@ -28,10 +28,10 @@ export const RequirementEditPage: React.FC = () => {
   const mutation = useMutation({
     mutationFn: ({ id, data }: { id: number; data: UpdateRequirementRequest }) =>
       updateRequirementApi(id, data),
-    onSuccess: () => {
+    onSuccess: (response) => {
       addToast({ message: '更新成功', variant: 'success' });
       queryClient.invalidateQueries({ queryKey: ['requirements'] });
-      navigate(`/requirements/${id}`);
+      navigate(`/requirements/${response.id}`);
     },
     onError: (error: Error) => {
       addToast({ message: error.message || '更新失败', variant: 'error' });
@@ -47,7 +47,7 @@ export const RequirementEditPage: React.FC = () => {
       id: Number(id),
       data: {
         ...data,
-        version: requirement.version || undefined,
+        version: requirement.version,
       },
     });
   };
@@ -55,8 +55,8 @@ export const RequirementEditPage: React.FC = () => {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-text-primary">编辑需求</h1>
-        <p className="text-text-muted mt-1">修改需求信息</p>
+        <h1 className="text-2xl font-bold">编辑需求</h1>
+        <p className="text-text-muted mt-1">修改需求信息 · 当前版本 v{requirement.version}</p>
       </div>
 
       <div className="bg-surface rounded-lg border border-border p-6">

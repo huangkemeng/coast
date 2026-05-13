@@ -1,15 +1,36 @@
+export enum UserRole {
+  Admin = 0,
+  Developer = 1,
+  Tester = 2,
+}
+
+export const UserRoleName: Record<UserRole, string> = {
+  [UserRole.Admin]: '管理员',
+  [UserRole.Developer]: '开发',
+  [UserRole.Tester]: '测试',
+};
+
 export interface User {
   id: number;
   username: string;
   realName: string;
   role: UserRole;
+  phone: string | null;
+  email: string | null;
+  isEnabled: boolean;
   createdAt: string;
   updatedAt: string;
 }
 
-export enum UserRole {
-  User = 0,
-  Admin = 1,
+export interface UserListItem {
+  id: number;
+  username: string;
+  realName: string;
+  role: UserRole;
+  phone: string | null;
+  email: string | null;
+  isEnabled: boolean;
+  createdAt: string;
 }
 
 export interface LoginRequest {
@@ -18,6 +39,19 @@ export interface LoginRequest {
 }
 
 export interface LoginResponse {
-  token: string;
-  user: User;
+  accessToken: string;
+  refreshToken: string;
+}
+
+export interface CreateUserRequest {
+  username: string;
+  password: string;
+  realName: string;
+  role: UserRole;
+  phone?: string;
+  email?: string;
+}
+
+export interface UpdateUserRequest extends CreateUserRequest {
+  isEnabled?: boolean;
 }

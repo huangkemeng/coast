@@ -1,20 +1,10 @@
 import { apiClient } from './client';
-import type {
-  Robot,
-  RobotListItem,
-  CreateRobotRequest,
-  UpdateRobotRequest,
-  TestRobotResponse,
-} from '@/types/robot';
+import type { Robot, RobotListItem, CreateRobotRequest, UpdateRobotRequest, TestRobotResponse } from '@/types/robot';
 import type { PageRequest, PageResponse } from '@/types/api';
 
-export interface GetRobotsParams extends PageRequest {
-  keyword?: string;
-}
+export interface GetRobotsParams extends PageRequest {}
 
-export const getRobotsApi = async (
-  params: GetRobotsParams
-): Promise<PageResponse<RobotListItem>> => {
+export const getRobotsApi = async (params: GetRobotsParams): Promise<PageResponse<RobotListItem>> => {
   const response = await apiClient.get<PageResponse<RobotListItem>>('/robots', { params });
   return response.data;
 };
@@ -24,17 +14,12 @@ export const getRobotByIdApi = async (id: number): Promise<Robot> => {
   return response.data;
 };
 
-export const createRobotApi = async (
-  data: CreateRobotRequest
-): Promise<Robot> => {
-  const response = await apiClient.post<Robot>('/robots', data);
+export const createRobotApi = async (data: CreateRobotRequest): Promise<{ id: number }> => {
+  const response = await apiClient.post<{ id: number }>('/robots', data);
   return response.data;
 };
 
-export const updateRobotApi = async (
-  id: number,
-  data: UpdateRobotRequest
-): Promise<Robot> => {
+export const updateRobotApi = async (id: number, data: UpdateRobotRequest): Promise<Robot> => {
   const response = await apiClient.put<Robot>(`/robots/${id}`, data);
   return response.data;
 };
