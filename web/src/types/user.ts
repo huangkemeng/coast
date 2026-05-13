@@ -45,13 +45,19 @@ export interface LoginResponse {
 
 export interface CreateUserRequest {
   username: string;
-  password: string;
   realName: string;
+  password: string;
   role: UserRole;
   phone?: string;
   email?: string;
 }
 
-export interface UpdateUserRequest extends CreateUserRequest {
+export interface UpdateUserRequest {
+  username: string;
+  realName: string;
+  password?: string;
+  role: UserRole;
+  phone?: string;
+  email?: string;
   isEnabled?: boolean;
 }

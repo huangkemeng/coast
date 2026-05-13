@@ -10,6 +10,8 @@ interface UserFormData {
   realName: string;
   password?: string;
   role: number;
+  phone?: string;
+  email?: string;
 }
 
 export const UserCreatePage: React.FC = () => {
@@ -31,13 +33,24 @@ export const UserCreatePage: React.FC = () => {
   });
 
   const handleSubmit = (data: UserFormData) => {
-    mutation.mutate(data);
+    if (!data.password) {
+      addToast({ message: '请输入密码', variant: 'error' });
+      return;
+    }
+    mutation.mutate({
+      username: data.username,
+      realName: data.realName,
+      password: data.password,
+      role: data.role,
+      phone: data.phone,
+      email: data.email,
+    });
   };
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-text-primary">新建用户</h1>
+        <h1 className="text-2xl font-bold">新建用户</h1>
         <p className="text-text-muted mt-1">填写用户信息以创建新的用户</p>
       </div>
 

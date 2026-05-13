@@ -17,11 +17,12 @@ import {
   TableRow,
 } from '@/components/ui/Table';
 import { formatDateTime } from '@/utils/dateUtils';
-import type { User } from '@/types/user';
+import { UserRoleName } from '@/types/user';
+import type { UserListItem } from '@/types/user';
 import { MoreHorizontal, Edit, Trash2 } from 'lucide-react';
 
 interface UserTableProps {
-  data: User[];
+  data: UserListItem[];
   isLoading?: boolean;
   onDelete?: (id: number) => void;
 }
@@ -61,8 +62,8 @@ export const UserTable: React.FC<UserTableProps> = ({
               <TableCell className="font-medium">{item.username}</TableCell>
               <TableCell>{item.realName}</TableCell>
               <TableCell>
-                <Badge variant={item.role === 1 ? 'secondary' : 'outline'}>
-                  {item.role === 1 ? '管理员' : '用户'}
+                <Badge variant={item.role === 0 ? 'secondary' : 'outline'}>
+                  {UserRoleName[item.role]}
                 </Badge>
               </TableCell>
               <TableCell className="text-text-muted">
@@ -84,8 +85,8 @@ export const UserTable: React.FC<UserTableProps> = ({
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
+                      className="text-red-500 focus:text-red-500"
                       onClick={() => onDelete?.(item.id)}
-                      className="text-error"
                     >
                       <Trash2 className="h-4 w-4 mr-2" />
                       删除

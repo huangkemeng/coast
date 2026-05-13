@@ -11,6 +11,8 @@ interface UserFormData {
   realName: string;
   password?: string;
   role: number;
+  phone?: string;
+  email?: string;
 }
 
 interface UserFormProps {
@@ -37,6 +39,8 @@ export const UserForm: React.FC<UserFormProps> = ({
       realName: initialData?.realName || '',
       password: '',
       role: initialData?.role ?? 0,
+      phone: initialData?.phone || undefined,
+      email: initialData?.email || undefined,
     },
   });
 
@@ -81,16 +85,34 @@ export const UserForm: React.FC<UserFormProps> = ({
           control={control}
           rules={{ required: '请选择角色' }}
           render={({ field }) => (
-            <Select value={field.value.toString()} onValueChange={(v) => field.onChange(parseInt(v))}>
+            <Select
+              value={field.value?.toString() || '0'}
+              onValueChange={(value) => field.onChange(parseInt(value))}
+            >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="0">用户</SelectItem>
-                <SelectItem value="1">管理员</SelectItem>
+                <SelectItem value="0">管理员</SelectItem>
+                <SelectItem value="1">开发</SelectItem>
+                <SelectItem value="2">测试</SelectItem>
               </SelectContent>
             </Select>
           )}
+        />
+      </FormField>
+
+      <FormField label="手机号" error={errors.phone?.message}>
+        <Input
+          {...register('phone')}
+          placeholder="请输入手机号（可选）"
+        />
+      </FormField>
+
+      <FormField label="邮箱" error={errors.email?.message}>
+        <Input
+          {...register('email')}
+          placeholder="请输入邮箱（可选）"
         />
       </FormField>
 

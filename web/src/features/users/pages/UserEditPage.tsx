@@ -6,13 +6,7 @@ import { LoadingOverlay } from '@/components/common/LoadingOverlay';
 import { ErrorState } from '@/components/common/ErrorState';
 import { useUIStore } from '@/stores/uiStore';
 import { getUserByIdApi, updateUserApi } from '@/api/users';
-
-interface UserFormData {
-  username: string;
-  realName: string;
-  password?: string;
-  role: number;
-}
+import type { UpdateUserRequest } from '@/types/user';
 
 export const UserEditPage: React.FC = () => {
   const { id } = useParams();
@@ -32,7 +26,7 @@ export const UserEditPage: React.FC = () => {
   });
 
   const mutation = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: Partial<UserFormData> }) =>
+    mutationFn: ({ id, data }: { id: number; data: UpdateUserRequest }) =>
       updateUserApi(id, data),
     onSuccess: () => {
       addToast({ message: '更新成功', variant: 'success' });
@@ -49,13 +43,16 @@ export const UserEditPage: React.FC = () => {
   if (error) return <ErrorState message="加载失败" onRetry={refetch} />;
   if (!user) return <ErrorState message="用户不存在" />;
 
-  const handleSubmit = (data: UserFormData) => {
+  const handleSubmit = (data: { password?: string; realName: string; role: number; phone?: string; email?: string }) => {
     mutation.mutate({
       id: Number(id),
       data: {
+        username: user.username,
         realName: data.realName,
+        password: data.password && data.password.length > 0 ? data.password : undefined,
         role: data.role,
-        ...(data.password ? { password: data.password } : {}),
+        phone: data.phone,
+        email: data.email,
       },
     });
   };
@@ -63,7 +60,7 @@ export const UserEditPage: React.FC = () => {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-text-primary">编辑用户</h1>
+        <h1 className="text-2xl font-bold">编辑用户</h1>
         <p className="text-text-muted mt-1">修改用户信息</p>
       </div>
 
