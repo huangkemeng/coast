@@ -31,7 +31,7 @@ export const ProjectsListPage: React.FC = () => {
     sortOrder: 'desc',
   };
 
-  const { data, isLoading, refetch } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['projects', params],
     queryFn: () => getProjectsApi(params),
   });

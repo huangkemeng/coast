@@ -18,7 +18,7 @@ const Pagination: React.FC<PaginationProps> = ({
   onPageChange,
   className,
 }) => {
-  const [windowSize, setWindowSize] = React.useState(5);
+  const [windowSize, setWindowSize] = React.useState(pageSize >= 20 ? 7 : 5);
   
   React.useEffect(() => {
     const updateWindowSize = () => {

@@ -7,17 +7,17 @@ import type {
   UpdateRequirementRequest,
   ChangeStatusRequest,
 } from '@/types/requirement';
-import type { PageRequest, PageResponse, RequirementFilters } from '@/types/api';
+import type { PageRequest, PageResponse } from '@/types/api';
 
 export interface GetRequirementsParams extends PageRequest {
   keyword?: string;
-  projectId?: number;
-  followerId?: number;
-  status?: number;
-  priority?: number;
-  isConfirmed?: boolean;
-  dateFrom?: string;
-  dateTo?: string;
+  projectId?: number | null;
+  followerId?: number | null;
+  status?: number | null;
+  priority?: number | null;
+  isConfirmed?: boolean | null;
+  dateFrom?: string | null;
+  dateTo?: string | null;
 }
 
 export const getRequirementsApi = async (

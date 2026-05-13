@@ -12,7 +12,6 @@ import {
   Code,
   FlaskConical,
   CheckCircle,
-  ListTodo,
   TrendingUp,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';

@@ -1,6 +1,5 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { getRequirementsApi, GetRequirementsParams } from '@/api/requirements';
-import type { PageResponse, RequirementFilters } from '@/types/api';
 
 export const useRequirements = (params: GetRequirementsParams) => {
   return useQuery({

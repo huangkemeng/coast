@@ -40,8 +40,8 @@ export const RequirementForm: React.FC<RequirementFormProps> = ({
   } = useForm<CreateRequirementRequest>({
     defaultValues: {
       name: initialData?.name || '',
-      projectId: initialData?.projectId,
-      followerId: initialData?.followerId,
+      projectId: initialData?.projectId ?? undefined,
+      followerId: initialData?.followerId ?? undefined,
       priority: initialData?.priority ?? 0,
       isConfirmed: initialData?.isConfirmed ?? false,
       price: initialData?.price ?? undefined,

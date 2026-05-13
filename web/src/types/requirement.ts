@@ -68,8 +68,8 @@ export interface RequirementTimeline {
 
 export interface CreateRequirementRequest {
   name: string;
-  projectId?: number;
-  followerId?: number;
+  projectId?: number | null;
+  followerId?: number | null;
   priority?: number;
   isConfirmed?: boolean;
   price?: number | null;

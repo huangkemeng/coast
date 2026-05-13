@@ -2,28 +2,27 @@ import React, { useState } from 'react';
 import { Input } from '@/components/ui/Input';
 import { Button } from '@/components/ui/Button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/Select';
-import { Badge } from '@/components/ui/Badge';
 import { FormField } from '@/components/ui/FormField';
 import { Search, X, Filter } from 'lucide-react';
+import type { RequirementFilters as RequirementFiltersType } from '@/types/api';
 
 interface RequirementFiltersProps {
-  onFilterChange: (filters: RequirementFiltersState) => void;
+  onFilterChange: (filters: RequirementFiltersType) => void;
   projectOptions: { id: number; name: string }[];
-  userOptions: { id: number; name: string }[];
+  userOptions?: { id: number; name: string }[];
 }
 
 interface RequirementFiltersState {
-  keyword: string;
-  projectId: number | null;
-  status: number | null;
-  priority: number | null;
-  isConfirmed: boolean | null;
+  keyword?: string;
+  projectId?: number | null;
+  status?: number | null;
+  priority?: number | null;
+  isConfirmed?: boolean | null;
 }
 
 export const RequirementFilters: React.FC<RequirementFiltersProps> = ({
   onFilterChange,
   projectOptions,
-  userOptions,
 }) => {
   const [filters, setFilters] = useState<RequirementFiltersState>({
     keyword: '',
@@ -41,7 +40,7 @@ export const RequirementFilters: React.FC<RequirementFiltersProps> = ({
   };
 
   const handleClear = () => {
-    const clearedFilters = {
+    const clearedFilters: RequirementFiltersState = {
       keyword: '',
       projectId: null,
       status: null,
@@ -142,7 +141,7 @@ export const RequirementFilters: React.FC<RequirementFiltersProps> = ({
 
           <FormField label="确认状态">
             <Select
-              value={filters.isConfirmed === null ? '' : filters.isConfirmed.toString()}
+              value={filters.isConfirmed == null ? '' : filters.isConfirmed.toString()}
               onValueChange={(value) =>
                 handleChange('isConfirmed', value === '' ? null : value === 'true')
               }

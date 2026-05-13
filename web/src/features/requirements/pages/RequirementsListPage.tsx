@@ -26,19 +26,17 @@ export const RequirementsListPage: React.FC = () => {
   const [pageIndex, setPageIndex] = useState(1);
   const [pageSize] = useState(10);
   const [filters, setFilters] = useState<RequirementFiltersType>({});
-  const [sortBy, setSortBy] = useState('createdAt');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [deleteId, setDeleteId] = useState<number | null>(null);
 
   const params: GetRequirementsParams = {
     pageIndex,
     pageSize,
-    sortBy,
-    sortOrder,
+    sortBy: 'createdAt',
+    sortOrder: 'desc',
     ...filters,
   };
 
-  const { data, isLoading, refetch } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['requirements', params],
     queryFn: () => getRequirementsApi(params),
   });
@@ -56,15 +54,6 @@ export const RequirementsListPage: React.FC = () => {
   const handleFilterChange = (newFilters: RequirementFiltersType) => {
     setFilters(newFilters);
     setPageIndex(1);
-  };
-
-  const handleSort = (column: string) => {
-    if (sortBy === column) {
-      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortBy(column);
-      setSortOrder('desc');
-    }
   };
 
   const handleDelete = async () => {

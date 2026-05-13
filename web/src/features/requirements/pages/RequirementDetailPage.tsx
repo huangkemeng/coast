@@ -1,5 +1,5 @@
 import React from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -10,7 +10,7 @@ import { usePermission } from '@/stores/permissionStore';
 import { getRequirementByIdApi, getRequirementTimelineApi } from '@/api/requirements';
 import { formatDateTime } from '@/utils/dateUtils';
 import { formatPrice } from '@/utils/formatters';
-import { ArrowLeft, Edit, Clock, User, FolderKanban, AlertCircle, Check } from 'lucide-react';
+import { ArrowLeft, Edit, AlertCircle, Check } from 'lucide-react';
 
 export const RequirementDetailPage: React.FC = () => {
   const { id } = useParams();

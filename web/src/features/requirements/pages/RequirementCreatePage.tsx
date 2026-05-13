@@ -5,7 +5,6 @@ import { RequirementForm } from '../components/RequirementForm';
 import { useUIStore } from '@/stores/uiStore';
 import { createRequirementApi } from '@/api/requirements';
 import type { CreateRequirementRequest } from '@/types/requirement';
-import type { Requirement } from '@/types/requirement';
 
 export const RequirementCreatePage: React.FC = () => {
   const navigate = useNavigate();

@@ -24,3 +24,15 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
 
   return <>{children}</>;
 };
+
+export const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const location = useLocation();
+  const { isAuthenticated } = useAuthStore();
+
+  if (isAuthenticated) {
+    const from = (location.state as { from?: Location })?.from?.pathname || '/dashboard';
+    return <Navigate to={from} replace />;
+  }
+
+  return <>{children}</>;
+};

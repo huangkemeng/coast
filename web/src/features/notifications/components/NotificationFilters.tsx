@@ -4,18 +4,19 @@ import { Button } from '@/components/ui/Button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/Select';
 import { FormField } from '@/components/ui/FormField';
 import { Search, X } from 'lucide-react';
+import type { NotificationFilters as NotificationFiltersType } from '@/types/api';
 
 interface NotificationFiltersProps {
-  onFilterChange: (filters: NotificationFiltersState) => void;
+  onFilterChange: (filters: NotificationFiltersType) => void;
   robotOptions: { id: number; name: string }[];
 }
 
 interface NotificationFiltersState {
-  requirementId: number | null;
-  robotId: number | null;
-  status: number | null;
-  dateFrom: string | null;
-  dateTo: string | null;
+  requirementId?: number | null;
+  robotId?: number | null;
+  status?: number | null;
+  dateFrom?: string | null;
+  dateTo?: string | null;
 }
 
 export const NotificationFilters: React.FC<NotificationFiltersProps> = ({

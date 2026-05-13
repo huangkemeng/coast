@@ -35,19 +35,19 @@ export interface StatusDistributionItem {
 
 export interface RequirementFilters {
   keyword?: string;
-  projectId?: number;
-  followerId?: number;
-  status?: number;
-  priority?: number;
-  isConfirmed?: boolean;
-  dateFrom?: string;
-  dateTo?: string;
+  projectId?: number | null;
+  followerId?: number | null;
+  status?: number | null;
+  priority?: number | null;
+  isConfirmed?: boolean | null;
+  dateFrom?: string | null;
+  dateTo?: string | null;
 }
 
 export interface NotificationFilters {
-  requirementId?: number;
-  robotId?: number;
-  status?: number;
-  dateFrom?: string;
-  dateTo?: string;
+  requirementId?: number | null;
+  robotId?: number | null;
+  status?: number | null;
+  dateFrom?: string | null;
+  dateTo?: string | null;
 }

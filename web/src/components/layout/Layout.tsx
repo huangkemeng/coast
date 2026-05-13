@@ -6,7 +6,7 @@ import { useUIStore } from '@/stores/uiStore';
 import { cn } from '@/lib/utils';
 
 export const Layout: React.FC = () => {
-  const { sidebarCollapsed, toasts, removeToast } = useUIStore();
+  const { toasts, removeToast } = useUIStore();
 
   return (
     <div className="flex h-screen bg-background">
