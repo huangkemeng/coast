@@ -1,0 +1,7 @@
+import { apiClient } from './client';
+import type { PageRequest, PageResponse, DashboardStats } from '@/types/api';
+
+export const getDashboardStatsApi = async (): Promise<DashboardStats> => {
+  const response = await apiClient.get<DashboardStats>('/dashboard/stats');
+  return response.data;
+};
