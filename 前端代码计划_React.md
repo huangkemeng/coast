@@ -3,6 +3,8 @@
 > 基于测试用例文档: [需求跟踪管理系统_测试用例.md](需求跟踪管理系统_测试用例.md)
 > 
 > 对齐后端接口: [后端代码计划_CSharp.md](后端代码计划_CSharp.md)
+> 
+> 覆盖测试用例总计: **~252条**（需求管理76条 + 状态流转32条 + 项目管理16条 + 机器人配置15条 + 通知管理19条 + 用户管理9条 + 用户认证72条 + 非功能需求13条）
 
 ---
 
@@ -3586,6 +3588,1837 @@ const RequirementForm = ({ requirement, onSubmit }) => {
   );
 };
 ```
+
+---
+
+## 15. 状态机实现（覆盖 TC-FLOW-001~032）
+
+### 15.1 状态流转状态机定义
+
+```typescript
+// features/requirements/utils/statusMachine.ts
+
+export enum RequirementStatus {
+  PendingConfirm = 0,      // 待确认
+  Confirmed = 1,           // 已确认
+  PendingQuote = 2,       // 待报价
+  Quoted = 3,             // 已报价
+  PendingDev = 4,         // 待开发
+  InDev = 5,              // 开发中
+  InTest = 6,             // 测试中
+  AcceptedPendingLaunch = 7, // 已验收待上线
+  Launched = 8            // 已上线
+}
+
+export const STATUS_LABELS: Record<RequirementStatus, string> = {
+  [RequirementStatus.PendingConfirm]: '待确认',
+  [RequirementStatus.Confirmed]: '已确认',
+  [RequirementStatus.PendingQuote]: '待报价',
+  [RequirementStatus.Quoted]: '已报价',
+  [RequirementStatus.PendingDev]: '待开发',
+  [RequirementStatus.InDev]: '开发中',
+  [RequirementStatus.InTest]: '测试中',
+  [RequirementStatus.AcceptedPendingLaunch]: '已验收待上线',
+  [RequirementStatus.Launched]: '已上线'
+};
+
+export const STATUS_COLORS: Record<RequirementStatus, string> = {
+  [RequirementStatus.PendingConfirm]: 'secondary',
+  [RequirementStatus.Confirmed]: 'info',
+  [RequirementStatus.PendingQuote]: 'warning',
+  [RequirementStatus.Quoted]: 'warning',
+  [RequirementStatus.PendingDev]: 'secondary',
+  [RequirementStatus.InDev]: 'primary',
+  [RequirementStatus.InTest]: 'accent',
+  [RequirementStatus.AcceptedPendingLaunch]: 'success',
+  [RequirementStatus.Launched]: 'success'
+};
+
+export const VALID_TRANSITIONS: Record<RequirementStatus, RequirementStatus[]> = {
+  [RequirementStatus.PendingConfirm]: [RequirementStatus.Confirmed],
+  [RequirementStatus.Confirmed]: [RequirementStatus.PendingQuote],
+  [RequirementStatus.PendingQuote]: [RequirementStatus.Quoted],
+  [RequirementStatus.Quoted]: [RequirementStatus.PendingDev],
+  [RequirementStatus.PendingDev]: [RequirementStatus.InDev],
+  [RequirementStatus.InDev]: [RequirementStatus.InTest],
+  [RequirementStatus.InTest]: [RequirementStatus.AcceptedPendingLaunch],
+  [RequirementStatus.AcceptedPendingLaunch]: [RequirementStatus.Launched],
+  [RequirementStatus.Launched]: [] // 终态，不可流转
+};
+
+export function getValidNextStatuses(currentStatus: RequirementStatus): RequirementStatus[] {
+  return VALID_TRANSITIONS[currentStatus] || [];
+}
+
+export function canTransition(from: RequirementStatus, to: RequirementStatus): boolean {
+  return VALID_TRANSITIONS[from]?.includes(to) ?? false;
+}
+
+export function isTerminalStatus(status: RequirementStatus): boolean {
+  return status === RequirementStatus.Launched;
+}
+```
+
+### 15.2 状态选择器组件（仅显示合法后继状态）
+
+```typescript
+// features/requirements/components/StatusSelect.tsx
+import { useMemo } from 'react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/Select';
+import { RequirementStatus, STATUS_LABELS, getValidNextStatuses } from '../utils/statusMachine';
+
+interface StatusSelectProps {
+  value: RequirementStatus;
+  onChange: (status: RequirementStatus) => void;
+  disabled?: boolean;
+  showReverse?: boolean; // 是否显示逆向流转选项，默认 true
+}
+
+export const StatusSelect = ({ value, onChange, disabled, showReverse = true }: StatusSelectProps) => {
+  const validNextStatuses = useMemo(() => {
+    const nextStatuses = getValidNextStatuses(value);
+    if (showReverse && value > RequirementStatus.PendingConfirm) {
+      return [
+        value - 1 as RequirementStatus, // 逆向：前一个状态
+        ...nextStatuses
+      ];
+    }
+    return nextStatuses;
+  }, [value, showReverse]);
+
+  if (validNextStatuses.length === 0) {
+    return (
+      <div className="flex items-center">
+        <Badge variant="success">{STATUS_LABELS[value]}</Badge>
+        <span className="ml-2 text-sm text-slate-400">终态不可变更</span>
+      </div>
+    );
+  }
+
+  return (
+    <Select
+      value={String(value)}
+      onValueChange={(v) => onChange(Number(v) as RequirementStatus)}
+      disabled={disabled}
+    >
+      <SelectTrigger>
+        <SelectValue placeholder="选择状态" />
+      </SelectTrigger>
+      <SelectContent>
+        {validNextStatuses.map((status) => (
+          <SelectItem key={status} value={String(status)}>
+            <div className="flex items-center gap-2">
+              <Badge variant={status < value ? 'warning' : 'primary'}>
+                {status < value ? '← 退回' : '→ 推进'}
+              </Badge>
+              <span>{STATUS_LABELS[status]}</span>
+            </div>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+};
+
+// 测试用例: TC-FLOW-009, TC-FLOW-013, TC-FLOW-026~031
+```
+
+### 15.3 状态变更确认对话框
+
+```typescript
+// features/requirements/components/StatusChangeDialog.tsx
+import { useState } from 'react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/Dialog';
+import { Button } from '@/components/ui/Button';
+import { Textarea } from '@/components/ui/Textarea';
+import { RequirementStatus, STATUS_LABELS } from '../utils/statusMachine';
+
+interface StatusChangeDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  currentStatus: RequirementStatus;
+  newStatus: RequirementStatus;
+  onConfirm: (remark?: string) => Promise<void>;
+}
+
+export const StatusChangeDialog = ({ open, onOpenChange, currentStatus, newStatus, onConfirm }: StatusChangeDialogProps) => {
+  const [remark, setRemark] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleConfirm = async () => {
+    setIsSubmitting(true);
+    try {
+      await onConfirm(remark);
+      onOpenChange(false);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const isBackward = newStatus < currentStatus;
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>确认状态变更</DialogTitle>
+          <DialogDescription>
+            确定要将需求状态从「{STATUS_LABELS[currentStatus]}」变更为「{STATUS_LABELS[newStatus]}」吗？
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="py-4">
+          <div className="flex items-center gap-4 mb-4">
+            <Badge variant="secondary">{STATUS_LABELS[currentStatus]}</Badge>
+            <span className="text-slate-400">→</span>
+            <Badge variant={isBackward ? 'warning' : 'primary'}>
+              {STATUS_LABELS[newStatus]}
+            </Badge>
+          </div>
+
+          {isBackward && (
+            <Alert variant="warning" className="mb-4">
+              <AlertTitle>逆向流转提示</AlertTitle>
+              <AlertDescription>
+                此操作将需求状态回退，请确认是否需要重新测试。
+              </AlertDescription>
+            </Alert>
+          )}
+
+          <div className="space-y-2">
+            <label className="text-sm text-slate-400">变更备注（可选）</label>
+            <Textarea
+              value={remark}
+              onChange={(e) => setRemark(e.target.value)}
+              placeholder="输入状态变更原因..."
+              rows={3}
+            />
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            取消
+          </Button>
+          <Button onClick={handleConfirm} loading={isSubmitting}>
+            确认变更
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+// 测试用例: TC-FLOW-001~008, TC-FLOW-026~029
+```
+
+### 15.4 状态自动联动逻辑
+
+```typescript
+// features/requirements/hooks/useStatusAutoActions.ts
+import { useEffect } from 'react';
+import { useFormContext } from 'react-hook-form';
+import { RequirementStatus } from '../utils/statusMachine';
+
+export const useStatusAutoActions = () => {
+  const { setValue, watch } = useFormContext();
+  const status = watch('status');
+
+  useEffect(() => {
+    // TC-FLOW-015: 状态从待确认变为已确认，IsConfirmed 自动变为 true
+    if (status === RequirementStatus.Confirmed) {
+      setValue('isConfirmed', true, { shouldDirty: false });
+    }
+    
+    // TC-FLOW-016: 需求已确认标志不可手动编辑（设为只读）
+    // 注意：这里的实现是通过表单 disabled 属性控制的
+  }, [status, setValue]);
+
+  return { status };
+};
+
+// 实际交测时间、实际上线时间由后端自动填充，前端只读显示
+// TC-FLOW-017, TC-FLOW-018
+```
+
+### 15.5 已上线需求特殊处理
+
+```typescript
+// features/requirements/components/LaunchedRequirementGuard.tsx
+import { RequirementStatus } from '../utils/statusMachine';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/Alert';
+import { Lock } from 'lucide-react';
+
+interface LaunchedRequirementGuardProps {
+  requirement: any;
+  children: React.ReactNode;
+  canEdit?: boolean;
+}
+
+export const LaunchedRequirementGuard = ({ requirement, children, canEdit = false }: LaunchedRequirementGuardProps) => {
+  const isLaunched = requirement.status === RequirementStatus.Launched;
+  const { isAdmin } = usePermission();
+
+  if (!isAdmin() && !canEdit) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-4">
+      {isLaunched && (
+        <Alert variant="info">
+          <Lock className="h-4 w-4" />
+          <AlertTitle>已上线需求</AlertTitle>
+          <AlertDescription>
+            该需求已上线，仅可编辑备注字段，其他字段不可修改。
+          </AlertDescription>
+        </Alert>
+      )}
+      {children}
+    </div>
+  );
+};
+
+// 测试用例: TC-FLOW-010, TC-FLOW-012, TC-FLOW-021~023, TC-FLOW-032
+```
+
+---
+
+## 16. 乐观锁与并发控制（覆盖 TC-REQ-050~053）
+
+### 16.1 版本号管理 Hook
+
+```typescript
+// features/requirements/hooks/useOptimisticLock.ts
+import { useState, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { toast } from '@/components/ui/Toast';
+
+interface OptimisticLockState {
+  version: number;
+  isStale: boolean;
+  lastUpdatedAt: Date | null;
+}
+
+export const useOptimisticLock = (requirementId: number) => {
+  const queryClient = useQueryClient();
+  const [conflictDialogOpen, setConflictDialogOpen] = useState(false);
+
+  const getCurrentVersion = useCallback(() => {
+    const cached = queryClient.getQueryData(['requirement', requirementId]);
+    return cached?.version ?? 0;
+  }, [queryClient, requirementId]);
+
+  const handleVersionConflict = useCallback(() => {
+    setConflictDialogOpen(true);
+  }, []);
+
+  const refreshAndContinue = useCallback(async () => {
+    await queryClient.invalidateQueries(['requirement', requirementId]);
+    setConflictDialogOpen(false);
+    toast.success('数据已刷新，请重新编辑');
+  }, [queryClient, requirementId]);
+
+  const handleApiError = useCallback((error: any) => {
+    if (error?.code === 'VERSION_CONFLICT' || error?.status === 409) {
+      handleVersionConflict();
+      return true;
+    }
+    return false;
+  }, [handleVersionConflict]);
+
+  return {
+    getCurrentVersion,
+    handleVersionConflict,
+    handleApiError,
+    conflictDialogOpen,
+    setConflictDialogOpen,
+    refreshAndContinue
+  };
+};
+```
+
+### 16.2 版本冲突解决对话框
+
+```typescript
+// features/requirements/components/VersionConflictDialog.tsx
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/Dialog';
+import { Button } from '@/components/ui/Button';
+import { Alert, AlertDescription } from '@/components/ui/Alert';
+import { RefreshCw } from 'lucide-react';
+
+interface VersionConflictDialogProps {
+  open: boolean;
+  onRefresh: () => Promise<void>;
+  onCancel: () => void;
+}
+
+export const VersionConflictDialog = ({ open, onRefresh, onCancel }: VersionConflictDialogProps) => {
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>数据已被修改</DialogTitle>
+          <DialogDescription>
+            检测到该需求已被他人修改，请刷新页面获取最新数据后重新编辑。
+          </DialogDescription>
+        </DialogHeader>
+
+        <Alert variant="warning">
+          <AlertDescription>
+            为避免数据冲突，系统已阻止本次保存操作。请点击「刷新数据」按钮重新加载最新内容。
+          </AlertDescription>
+        </Alert>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel}>
+            取消
+          </Button>
+          <Button onClick={onRefresh}>
+            <RefreshCw className="h-4 w-4 mr-2" />
+            刷新数据
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+// 测试用例: TC-REQ-050, TC-REQ-051
+```
+
+### 16.3 编辑表单中的版本控制
+
+```typescript
+// features/requirements/pages/RequirementEditPage.tsx
+import { useEffect, useState } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useForm } from 'react-hook-form';
+import { toast } from '@/components/ui/Toast';
+import { useOptimisticLock } from '../hooks/useOptimisticLock';
+import { VersionConflictDialog } from '../components/VersionConflictDialog';
+
+interface RequirementFormData {
+  name: string;
+  requirementNo: string;
+  status: RequirementStatus;
+  // ... 其他字段
+}
+
+export const RequirementEditPage = () => {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { handleApiError, refreshAndContinue, conflictDialogOpen } = useOptimisticLock(Number(id));
+
+  const { data: requirement, isLoading } = useQuery({
+    queryKey: ['requirement', id],
+    queryFn: () => getRequirementById(Number(id)),
+    enabled: !!id
+  });
+
+  const { mutate: updateRequirement, isPending } = useMutation({
+    mutationFn: (data: RequirementFormData & { version: number }) => 
+      updateRequirement(Number(id), data),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['requirements']);
+      queryClient.invalidateQueries(['requirement', id]);
+      toast.success('需求更新成功');
+      navigate('/requirements');
+    },
+    onError: (error) => {
+      const handled = handleApiError(error);
+      if (!handled) {
+        toast.error(error.message || '更新失败');
+      }
+    }
+  });
+
+  const form = useForm<RequirementFormData>({
+    defaultValues: {
+      version: requirement?.version ?? 1
+    }
+  });
+
+  useEffect(() => {
+    if (requirement) {
+      form.reset({
+        name: requirement.name,
+        requirementNo: requirement.requirementNo,
+        status: requirement.status,
+        // ... 其他字段
+        version: requirement.version
+      });
+    }
+  }, [requirement, form]);
+
+  const onSubmit = (data: RequirementFormData) => {
+    updateRequirement({
+      ...data,
+      version: requirement.version // 提交时携带当前版本号
+    });
+  };
+
+  if (isLoading) return <LoadingSpinner />;
+  if (!requirement) return <NotFoundState />;
+
+  return (
+    <div className="container py-8">
+      <Form onSubmit={form.handleSubmit(onSubmit)}>
+        {/* 表单字段 */}
+        <FormField control={form.control} name="name" label="需求名称">
+          <Input />
+        </FormField>
+        
+        {/* 版本号提示 */}
+        <div className="text-sm text-slate-400">
+          当前版本: {requirement.version}（最后更新: {format(new Date(requirement.updatedAt), 'yyyy-MM-dd HH:mm')})
+        </div>
+
+        <div className="flex gap-4 mt-6">
+          <Button type="submit" loading={isPending}>
+            保存
+          </Button>
+          <Button variant="outline" onClick={() => navigate('/requirements')}>
+            取消
+          </Button>
+        </div>
+      </Form>
+
+      <VersionConflictDialog
+        open={conflictDialogOpen}
+        onRefresh={refreshAndContinue}
+        onCancel={() => navigate('/requirements')}
+      />
+    </div>
+  );
+};
+
+// 测试用例: TC-REQ-050~053
+```
+
+---
+
+## 17. 项目管理功能完善（覆盖 TC-PROJ-001~016）
+
+### 17.1 项目表单组件
+
+```typescript
+// features/projects/components/ProjectForm.tsx
+import { useForm } from 'react-hook-form';
+import { Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
+import { Textarea } from '@/components/ui/Textarea';
+
+interface ProjectFormData {
+  name: string;
+  code: string;
+  description?: string;
+  managerId?: number;
+}
+
+export const ProjectForm = ({ project, onSubmit }: Props) => {
+  const { register, handleSubmit, formState: { errors } } = useForm<ProjectFormData>({
+    defaultValues: project ?? {}
+  });
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <FormField label="项目名称" error={errors.name}>
+        <Input
+          {...register('name', { 
+            required: '请填写项目名称',
+            maxLength: { value: 100, message: '项目名称最多100字符' }
+          })}
+          placeholder="请输入项目名称"
+        />
+      </FormField>
+
+      <FormField label="项目编码" error={errors.code}>
+        <Input
+          {...register('code', {
+            required: '请填写项目编码',
+            maxLength: { value: 50, message: '项目编码最多50字符' },
+            pattern: { value: /^[A-Z0-9-]+$/, message: '项目编码只能包含大写字母、数字和连字符' }
+          })}
+          placeholder="如 PRJ-001"
+        />
+      </FormField>
+
+      <FormField label="项目描述">
+        <Textarea
+          {...register('description')}
+          placeholder="请输入项目描述（可选）"
+        />
+      </FormField>
+
+      <FormField label="项目负责人">
+        <UserSelect {...register('managerId')} />
+      </FormField>
+
+      <Button type="submit">保存</Button>
+    </form>
+  );
+};
+
+// 测试用例: TC-PROJ-001~003, TC-PROJ-011~015
+```
+
+### 17.2 项目删除约束检查
+
+```typescript
+// features/projects/hooks/useProjectDelete.ts
+import { useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { toast } from '@/components/ui/Toast';
+import { ConfirmDialog } from '@/components/common/ConfirmDialog';
+
+interface UseProjectDeleteOptions {
+  onDeleted?: () => void;
+}
+
+export const useProjectDelete = (options: UseProjectDeleteOptions = {}) => {
+  const { onDeleted } = options;
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [pendingProject, setPendingProject] = useState<Project | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const { mutate: deleteProject, isPending } = useMutation({
+    mutationFn: async (id: number) => {
+      const response = await deleteProjectApi(id);
+      return response;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries(['projects']);
+      toast.success('项目删除成功');
+      setDeleteConfirmOpen(false);
+      setPendingProject(null);
+      onDeleted?.();
+    },
+    onError: (error) => {
+      // TC-PROJ-005: 检测到有关联需求，阻止删除
+      if (error.code === 'HAS_ASSOCIATED_REQUIREMENTS') {
+        setDeleteError('该项目下存在需求，无法删除');
+      } else {
+        toast.error(error.message || '删除失败');
+      }
+    }
+  });
+
+  const handleDeleteClick = (project: Project) => {
+    setPendingProject(project);
+    setDeleteError(null);
+    setDeleteConfirmOpen(true);
+  };
+
+  const handleConfirmDelete = () => {
+    if (pendingProject) {
+      deleteProject(pendingProject.id);
+    }
+  };
+
+  return {
+    handleDeleteClick,
+    deleteConfirmOpen,
+    setDeleteConfirmOpen,
+    pendingProject,
+    deleteError,
+    isPending,
+    handleConfirmDelete
+  };
+};
+
+// 测试用例: TC-PROJ-004, TC-PROJ-005, TC-PROJ-016
+```
+
+### 17.3 项目关联需求数量检查
+
+```typescript
+// features/projects/components/ProjectTable.tsx
+export const ProjectTable = () => {
+  const { data: projects } = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => getProjects()
+  });
+
+  const { handleDeleteClick } = useProjectDelete();
+
+  const columns: ColumnDef<Project>[] = [
+    {
+      accessorKey: 'name',
+      header: '项目名称'
+    },
+    {
+      accessorKey: 'code',
+      header: '项目编码'
+    },
+    {
+      accessorKey: 'requirementCount',
+      header: '关联需求数',
+      cell: ({ row }) => (
+        <Badge variant={row.original.requirementCount > 0 ? 'primary' : 'secondary'}>
+          {row.original.requirementCount}
+        </Badge>
+      )
+    },
+    {
+      id: 'actions',
+      cell: ({ row }) => (
+        <Button
+          variant="destructive"
+          size="sm"
+          onClick={() => handleDeleteClick(row.original)}
+        >
+          删除
+        </Button>
+      )
+    }
+  ];
+
+  return <DataTable columns={columns} data={projects ?? []} />;
+};
+```
+
+---
+
+## 18. 机器人配置功能完善（覆盖 TC-BOT-001~015）
+
+### 18.1 机器人表单与强制测试
+
+```typescript
+// features/robots/components/RobotForm.tsx
+import { useState, useEffect } from 'react';
+import { useForm } from 'react-hook-form';
+import { Input } from '@/components/ui/Input';
+import { Button } from '@/components/ui/Button';
+import { toast } from '@/components/ui/Toast';
+
+interface RobotFormData {
+  name: string;
+  webhookUrl: string;
+  groupName?: string;
+}
+
+export const RobotForm = ({ robot, onSubmit }: Props) => {
+  const [hasTested, setHasTested] = useState(false);
+  const [testPassed, setTestPassed] = useState(false);
+  const [isTesting, setIsTesting] = useState(false);
+  const { register, handleSubmit, watch } = useForm<RobotFormData>({
+    defaultValues: robot ?? {}
+  });
+
+  const webhookUrl = watch('webhookUrl');
+
+  useEffect(() => {
+    // 重置测试状态当 webhook URL 变化时
+    setHasTested(false);
+    setTestPassed(false);
+  }, [webhookUrl]);
+
+  const handleTest = async () => {
+    if (!webhookUrl) {
+      toast.warning('请先填写 Webhook 地址');
+      return;
+    }
+
+    setIsTesting(true);
+    try {
+      const result = await testRobotConnection(webhookUrl);
+      if (result.success) {
+        setHasTested(true);
+        setTestPassed(true);
+        toast.success('测试连接成功');
+      } else {
+        setHasTested(true);
+        setTestPassed(false);
+        toast.error(result.message || '测试连接失败');
+      }
+    } catch (error) {
+      setHasTested(true);
+      setTestPassed(false);
+      toast.error('测试连接失败，请检查 Webhook 地址');
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  const onFormSubmit = (data: RobotFormData) => {
+    // TC-BOT-004: 未测试直接保存被阻止
+    if (!hasTested || !testPassed) {
+      toast.warning('请先测试机器人连接，测试通过后才能保存');
+      return;
+    }
+    onSubmit(data);
+  };
+
+  return (
+    <form onSubmit={handleSubmit(onFormSubmit)} className="space-y-4">
+      <FormField label="机器人名称">
+        <Input
+          {...register('name', { required: '请填写机器人名称' })}
+          placeholder="如：开发团队通知机器人"
+        />
+      </FormField>
+
+      <FormField label="Webhook 地址">
+        <div className="flex gap-2">
+          <Input
+            {...register('webhookUrl', { 
+              required: '请填写 Webhook 地址',
+              pattern: {
+                value: /^https:\/\/qyapi\.weixin\.qq\.com/,
+                message: '必须是企业微信的 HTTPS 地址'
+              }
+            })}
+            placeholder="https://qyapi.weixin.qq.com/..."
+            className="flex-1"
+          />
+          <Button 
+            type="button" 
+            variant="secondary"
+            onClick={handleTest}
+            disabled={isTesting}
+          >
+            {isTesting ? '测试中...' : '测试连接'}
+          </Button>
+        </div>
+        {hasTested && (
+          <div className={`text-sm ${testPassed ? 'text-emerald-500' : 'text-red-500'}`}>
+            {testPassed ? '✓ 连接成功' : '✗ 连接失败'}
+          </div>
+        )}
+      </FormField>
+
+      <FormField label="群组名称（可选）">
+        <Input
+          {...register('groupName')}
+          placeholder="如：开发团队"
+        />
+      </FormField>
+
+      {/* TC-BOT-004: 保存按钮在测试通过前禁用 */}
+      <Button type="submit" disabled={!testPassed}>
+        保存
+      </Button>
+    </form>
+  );
+};
+
+// 测试用例: TC-BOT-001~004, TC-BOT-012~013
+```
+
+### 18.2 机器人删除级联处理
+
+```typescript
+// features/robots/hooks/useRobotDelete.ts
+export const useRobotDelete = () => {
+  const queryClient = useQueryClient();
+  const [deleteInfo, setDeleteInfo] = useState<{
+    robot: Robot;
+    affectedRequirements: number;
+  } | null>(null);
+
+  const { mutate: deleteRobot, isPending } = useMutation({
+    mutationFn: async (id: number) => {
+      return deleteRobotApi(id);
+    },
+    onSuccess: (_, robotId) => {
+      queryClient.invalidateQueries(['robots']);
+      queryClient.invalidateQueries(['requirements']); // 清除关联需求的缓存
+      toast.success('机器人删除成功，关联需求已自动清除');
+    },
+    onError: (error) => {
+      toast.error(error.message || '删除失败');
+    }
+  });
+
+  const handleDeleteClick = (robot: Robot) => {
+    // 检查关联的需求数量
+    const affectedCount = robot.associatedRequirementCount ?? 0;
+    setDeleteInfo({ robot, affectedRequirements: affectedCount });
+  };
+
+  const handleConfirmDelete = () => {
+    if (deleteInfo) {
+      deleteRobot(deleteInfo.robot.id);
+      setDeleteInfo(null);
+    }
+  };
+
+  return {
+    handleDeleteClick,
+    deleteInfo,
+    setDeleteInfo,
+    isPending,
+    handleConfirmDelete
+  };
+};
+
+// 测试用例: TC-BOT-008
+```
+
+### 18.3 机器人删除确认对话框
+
+```typescript
+// features/robots/components/RobotDeleteDialog.tsx
+export const RobotDeleteDialog = ({ 
+  open, 
+  onOpenChange, 
+  robot, 
+  affectedRequirements, 
+  onConfirm, 
+  isPending 
+}: Props) => {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>确认删除机器人</DialogTitle>
+          <DialogDescription>
+            {affectedRequirements > 0 ? (
+              <div className="space-y-2">
+                <p>机器人「{robot?.name}」已关联 {affectedRequirements} 条需求。</p>
+                <p className="text-amber-500">删除后，这些需求的「通知机器人」字段将被清空。</p>
+              </div>
+            ) : (
+              <p>确定要删除机器人「{robot?.name}」吗？此操作不可撤销。</p>
+            )}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
+          <Button variant="destructive" onClick={onConfirm} loading={isPending}>
+            确认删除
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+```
+
+---
+
+## 19. 通知管理功能（覆盖 TC-NOTIFY-001~019）
+
+### 19.1 通知日志列表与筛选
+
+```typescript
+// features/notifications/pages/NotificationsListPage.tsx
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { DataTable } from '@/components/ui/Table';
+import { Badge } from '@/components/ui/Badge';
+import { DateRangePicker } from '@/components/ui/DateRangePicker';
+import { format } from 'dayjs';
+
+interface NotificationFilters {
+  requirementId?: number;
+  status?: NotificationStatus;
+  type?: NotificationType;
+  dateRange?: [string, string];
+  pageIndex?: number;
+  pageSize?: number;
+}
+
+export const NotificationsListPage = () => {
+  const [filters, setFilters] = useState<NotificationFilters>({
+    pageIndex: 1,
+    pageSize: 20
+  });
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['notifications', filters],
+    queryFn: () => getNotifications(filters)
+  });
+
+  const columns: ColumnDef<NotificationLog>[] = [
+    {
+      accessorKey: 'requirementName',
+      header: '需求名称',
+      cell: ({ row }) => (
+        <Link to={`/requirements/${row.original.requirementId}`}>
+          {row.original.requirementName}
+        </Link>
+      )
+    },
+    {
+      accessorKey: 'requirementNo',
+      header: '需求号'
+    },
+    {
+      accessorKey: 'type',
+      header: '通知类型',
+      cell: ({ row }) => (
+        <Badge variant={getNotificationTypeVariant(row.original.type)}>
+          {NOTIFICATION_TYPE_LABELS[row.original.type]}
+        </Badge>
+      )
+    },
+    {
+      accessorKey: 'robotName',
+      header: '机器人'
+    },
+    {
+      accessorKey: 'status',
+      header: '状态',
+      cell: ({ row }) => (
+        <Badge variant={getNotificationStatusVariant(row.original.status)}>
+          {getNotificationStatusLabel(row.original.status)}
+        </Badge>
+      )
+    },
+    {
+      accessorKey: 'errorMessage',
+      header: '错误信息',
+      cell: ({ row }) => row.original.errorMessage ? (
+        <Tooltip content={row.original.errorMessage}>
+          <span className="text-red-500 cursor-help">查看详情</span>
+        </Tooltip>
+      ) : '-'
+    },
+    {
+      accessorKey: 'retryCount',
+      header: '重试次数',
+      cell: ({ row }) => (
+        <span className={row.original.retryCount > 0 ? 'text-amber-500' : ''}>
+          {row.original.retryCount}
+        </span>
+      )
+    },
+    {
+      accessorKey: 'sentAt',
+      header: '发送时间',
+      cell: ({ row }) => format(row.original.sentAt, 'YYYY-MM-DD HH:mm:ss')
+    }
+  ];
+
+  return (
+    <div className="space-y-4">
+      <NotificationFilters value={filters} onChange={setFilters} />
+      <DataTable columns={columns} data={data?.items ?? []} loading={isLoading} />
+      <Pagination
+        current={filters.pageIndex ?? 1}
+        pageSize={filters.pageSize ?? 20}
+        total={data?.totalCount ?? 0}
+        onChange={(page) => setFilters(f => ({ ...f, pageIndex: page }))}
+      />
+    </div>
+  );
+};
+
+// 测试用例: TC-NOTIFY-001~005, TC-NOTIFY-016~019
+```
+
+### 19.2 通知类型与状态定义
+
+```typescript
+// features/notifications/types/index.ts
+
+export enum NotificationType {
+  StatusChange = 1,    // 状态变更通知
+  Reminder = 2,       // 时间提醒
+  System = 3         // 系统通知
+}
+
+export enum NotificationStatus {
+  Pending = 0,        // 待发送
+  Sent = 1,          // 已发送
+  Failed = 2,        // 发送失败
+  Retrying = 3       // 重试中
+}
+
+export const NOTIFICATION_TYPE_LABELS: Record<NotificationType, string> = {
+  [NotificationType.StatusChange]: '状态变更',
+  [NotificationType.Reminder]: '时间提醒',
+  [NotificationType.System]: '系统通知'
+};
+
+export const NOTIFICATION_STATUS_LABELS: Record<NotificationStatus, string> = {
+  [NotificationStatus.Pending]: '待发送',
+  [NotificationStatus.Sent]: '已发送',
+  [NotificationStatus.Failed]: '发送失败',
+  [NotificationStatus.Retrying]: '重试中'
+};
+```
+
+---
+
+## 20. 用户管理功能（覆盖 TC-USER-001~009）
+
+### 20.1 用户表单组件
+
+```typescript
+// features/users/components/UserForm.tsx
+import { useForm } from 'react-hook-form';
+import { Input } from '@/components/ui/Input';
+import { Select } from '@/components/ui/Select';
+import { Switch } from '@/components/ui/Switch';
+
+interface UserFormData {
+  username: string;
+  realName: string;
+  role: UserRole;
+  phone?: string;
+  email?: string;
+  isEnabled: boolean;
+}
+
+export const UserForm = ({ user, onSubmit }: Props) => {
+  const { register, handleSubmit } = useForm<UserFormData>({
+    defaultValues: {
+      isEnabled: true,
+      ...user
+    }
+  });
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <FormField label="用户名">
+        <Input
+          {...register('username', { required: '请填写用户名' })}
+          placeholder="登录用户名"
+        />
+      </FormField>
+
+      <FormField label="姓名">
+        <Input
+          {...register('realName', { required: '请填写姓名' })}
+          placeholder="真实姓名"
+        />
+      </FormField>
+
+      <FormField label="角色">
+        <Select {...register('role')}>
+          <option value={UserRole.Admin}>管理员</option>
+          <option value={UserRole.Developer}>开发人员</option>
+          <option value={UserRole.Tester}>测试人员</option>
+        </Select>
+      </FormField>
+
+      <FormField label="手机号">
+        <Input {...register('phone')} placeholder="可选" />
+      </FormField>
+
+      <FormField label="邮箱">
+        <Input {...register('email')} placeholder="可选" type="email" />
+      </FormField>
+
+      <FormField label="启用状态">
+        <div className="flex items-center gap-2">
+          <Switch {...register('isEnabled')} />
+          <span>{watch('isEnabled') ? '启用' : '禁用'}</span>
+        </div>
+      </FormField>
+
+      <Button type="submit">保存</Button>
+    </form>
+  );
+};
+```
+
+### 20.2 用户删除约束检查
+
+```typescript
+// features/users/hooks/useUserDelete.ts
+export const useUserDelete = () => {
+  const queryClient = useQueryClient();
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [pendingUser, setPendingUser] = useState<User | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const { mutate: deleteUser, isPending } = useMutation({
+    mutationFn: deleteUserApi,
+    onSuccess: () => {
+      queryClient.invalidateQueries(['users']);
+      toast.success('用户删除成功');
+      setConfirmOpen(false);
+      setPendingUser(null);
+    },
+    onError: (error) => {
+      // TC-USER-005: 检测到是跟进人，阻止删除
+      if (error.code === 'IS_FOLLOWER') {
+        setDeleteError(`该用户是 ${error.affectedCount} 条需求的跟进人，无法删除`);
+      } else {
+        toast.error(error.message || '删除失败');
+      }
+    }
+  });
+
+  const handleDeleteClick = (user: User) => {
+    setPendingUser(user);
+    setDeleteError(null);
+    setConfirmOpen(true);
+  };
+
+  return {
+    handleDeleteClick,
+    pendingUser,
+    deleteError,
+    confirmOpen,
+    setConfirmOpen,
+    isPending,
+    handleConfirm: () => pendingUser && deleteUser(pendingUser.id)
+  };
+};
+
+// 测试用例: TC-USER-004~005
+```
+
+### 20.3 禁用用户联动检查
+
+```typescript
+// features/users/components/UserStatusToggle.tsx
+export const UserStatusToggle = ({ user, onToggle }: Props) => {
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const handleToggle = async (newEnabled: boolean) => {
+    if (!newEnabled && user.associatedRequirementCount > 0) {
+      setConfirmOpen(true);
+    } else {
+      onToggle(newEnabled);
+    }
+  };
+
+  return (
+    <>
+      <Switch
+        checked={user.isEnabled}
+        onCheckedChange={handleToggle}
+      />
+      
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>确认禁用用户</DialogTitle>
+            <DialogDescription>
+              用户「{user.realName}」是 {user.associatedRequirementCount} 条需求的跟进人。
+              禁用后，这些需求将无法分配给他/她。
+              确定要禁用吗？
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button onClick={() => setConfirmOpen(false)}>取消</Button>
+            <Button variant="warning" onClick={() => {
+              onToggle(false);
+              setConfirmOpen(false);
+            }}>
+              确认禁用
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+};
+
+// 测试用例: TC-USER-006~007
+```
+
+---
+
+## 21. 认证模块完整实现（覆盖 TC-AUTH-001~072）
+
+### 21.1 认证 API 与类型
+
+```typescript
+// api/auth.ts
+
+export interface LoginRequest {
+  username: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  token: string;
+  user: UserInfo;
+  expiresAt: string;
+}
+
+export interface RegisterRequest {
+  username: string;
+  password: string;
+  confirmPassword: string;
+  realName: string;
+  phone?: string;
+  email?: string;
+}
+
+export interface ChangePasswordRequest {
+  oldPassword: string;
+  newPassword: string;
+  confirmPassword: string;
+}
+
+export interface ResetPasswordRequest {
+  username: string;
+  email?: string;
+}
+
+export const authApi = {
+  login: (data: LoginRequest) => 
+    post<LoginResponse>('/api/auth/login', data),
+  
+  logout: () => 
+    post('/api/auth/logout'),
+  
+  register: (data: RegisterRequest) => 
+    post<UserInfo>('/api/auth/register', data),
+  
+  changePassword: (data: ChangePasswordRequest) => 
+    post('/api/auth/change-password', data),
+  
+  resetPassword: (data: ResetPasswordRequest) => 
+    post('/api/auth/reset-password', data),
+  
+  sendVerifyCode: (email: string) => 
+    post('/api/auth/send-verify-code', { email }),
+  
+  getCurrentUser: () => 
+    get<UserInfo>('/api/auth/me'),
+  
+  refreshToken: () => 
+    post<LoginResponse>('/api/auth/refresh-token')
+};
+```
+
+### 21.2 登录页面完整实现
+
+```typescript
+// features/auth/pages/LoginPage.tsx
+import { useState } from 'react';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { useForm } from 'react-hook-form';
+import { Input } from '@/components/ui/Input';
+import { Button } from '@/components/ui/Button';
+import { Checkbox } from '@/components/ui/Checkbox';
+import { toast } from '@/components/ui/Toast';
+import { useAuthStore } from '@/stores/authStore';
+
+interface LoginFormData {
+  username: string;
+  password: string;
+  rememberMe: boolean;
+}
+
+export const LoginPage = () => {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { login } = useAuthStore();
+  const [isLoading, setIsLoading] = useState(false);
+
+  const { register, handleSubmit, formState: { errors } } = useForm<LoginFormData>({
+    defaultValues: {
+      rememberMe: false
+    }
+  });
+
+  const from = (location.state as any)?.from?.pathname || '/dashboard';
+
+  const onSubmit = async (data: LoginFormData) => {
+    setIsLoading(true);
+    try {
+      await login({
+        username: data.username,
+        password: data.password,
+        rememberMe: data.rememberMe
+      });
+      toast.success('登录成功');
+      navigate(from, { replace: true });
+    } catch (error: any) {
+      if (error.code === 'ACCOUNT_DISABLED') {
+        toast.error('账号已被禁用，请联系管理员');
+      } else if (error.code === 'INVALID_CREDENTIALS') {
+        toast.error('用户名或密码错误');
+      } else {
+        toast.error(error.message || '登录失败');
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-900 px-4">
+      <div className="w-full max-w-md">
+        <div className="text-center mb-8">
+          <h1 className="text-3xl font-bold text-slate-100">需求跟踪管理系统</h1>
+          <p className="text-slate-400 mt-2">请登录以继续</p>
+        </div>
+
+        <div className="bg-slate-800 rounded-xl p-8 shadow-2xl border border-slate-700">
+          <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+            <FormField label="用户名" error={errors.username}>
+              <Input
+                {...register('username', {
+                  required: '请输入用户名',
+                  minLength: { value: 3, message: '用户名至少3个字符' },
+                  maxLength: { value: 50, message: '用户名最多50个字符' }
+                })}
+                placeholder="请输入用户名"
+                autoComplete="username"
+                autoFocus
+              />
+            </FormField>
+
+            <FormField label="密码" error={errors.password}>
+              <Input
+                type="password"
+                {...register('password', {
+                  required: '请输入密码',
+                  minLength: { value: 6, message: '密码至少6个字符' }
+                })}
+                placeholder="请输入密码"
+                autoComplete="current-password"
+              />
+            </FormField>
+
+            <div className="flex items-center justify-between">
+              <Checkbox {...register('rememberMe')} label="记住我" />
+              <Link to="/forgot-password" className="text-sm text-indigo-400 hover:text-indigo-300">
+                忘记密码？
+              </Link>
+            </div>
+
+            <Button type="submit" className="w-full" loading={isLoading} size="lg">
+              登录
+            </Button>
+          </form>
+
+          <div className="mt-6 text-center">
+            <span className="text-slate-400">还没有账号？</span>
+            <Link to="/register" className="text-indigo-400 hover:text-indigo-300 ml-1">
+              立即注册
+            </Link>
+          </div>
+        </div>
+
+        <div className="mt-4 text-center text-sm text-slate-500">
+          <p>演示账号: admin / admin123</p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// 测试用例: TC-AUTH-001~012
+```
+
+### 21.3 注册页面
+
+```typescript
+// features/auth/pages/RegisterPage.tsx
+interface RegisterFormData {
+  username: string;
+  password: string;
+  confirmPassword: string;
+  realName: string;
+  phone?: string;
+  email?: string;
+  agreeTerms: boolean;
+}
+
+export const RegisterPage = () => {
+  const navigate = useNavigate();
+  const { register: registerUser } = useAuthStore();
+
+  const { register, handleSubmit, watch, formState: { errors } } = useForm<RegisterFormData>({
+    defaultValues: {
+      agreeTerms: false
+    }
+  });
+
+  const password = watch('password');
+
+  const onSubmit = async (data: RegisterFormData) => {
+    try {
+      await registerUser({
+        username: data.username,
+        password: data.password,
+        realName: data.realName,
+        phone: data.phone,
+        email: data.email
+      });
+      toast.success('注册成功，请登录');
+      navigate('/login');
+    } catch (error) {
+      if (error.code === 'USERNAME_EXISTS') {
+        toast.error('用户名已存在');
+      } else {
+        toast.error(error.message || '注册失败');
+      }
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-900 px-4">
+      <div className="w-full max-w-lg">
+        <h1 className="text-2xl font-bold text-center mb-8">用户注册</h1>
+        
+        <form onSubmit={handleSubmit(onSubmit)} className="bg-slate-800 rounded-xl p-8 space-y-4">
+          {/* 用户名、密码、确认密码、姓名、手机、邮箱等字段 */}
+          
+          <Checkbox {...register('agreeTerms')} label="我已阅读并同意《用户协议》和《隐私政策》" />
+          
+          <Button type="submit" className="w-full">注册</Button>
+        </form>
+      </div>
+    </div>
+  );
+};
+
+// 测试用例: TC-AUTH-013~030
+```
+
+### 21.4 找回密码页面
+
+```typescript
+// features/auth/pages/ForgotPasswordPage.tsx
+export const ForgotPasswordPage = () => {
+  const [step, setStep] = useState<'input' | 'verify' | 'reset'>('input');
+  const [email, setEmail] = useState('');
+  const [verifyCode, setVerifyCode] = useState('');
+  const [countdown, setCountdown] = useState(0);
+
+  const sendVerifyCode = async () => {
+    await authApi.sendVerifyCode(email);
+    toast.success('验证码已发送到邮箱');
+    setCountdown(60);
+    setStep('verify');
+  };
+
+  const verifyCodeSubmit = async () => {
+    const result = await authApi.verifyCode({ email, code: verifyCode });
+    if (result.valid) {
+      setStep('reset');
+    }
+  };
+
+  const resetPassword = async (newPassword: string) => {
+    await authApi.resetPassword({ email, code: verifyCode, newPassword });
+    toast.success('密码重置成功，请登录');
+    navigate('/login');
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-slate-900">
+      {/* 根据 step 渲染不同表单 */}
+    </div>
+  );
+};
+
+// 测试用例: TC-AUTH-041~052
+```
+
+### 21.5 修改密码页面
+
+```typescript
+// features/auth/pages/ChangePasswordPage.tsx
+interface ChangePasswordFormData {
+  oldPassword: string;
+  newPassword: string;
+  confirmPassword: string;
+}
+
+export const ChangePasswordPage = () => {
+  const { changePassword } = useAuthStore();
+
+  const { register, handleSubmit, watch, formState: { errors } } = useForm<ChangePasswordFormData>();
+  const newPassword = watch('newPassword');
+
+  const onSubmit = async (data: ChangePasswordFormData) => {
+    try {
+      await changePassword({
+        oldPassword: data.oldPassword,
+        newPassword: data.newPassword
+      });
+      toast.success('密码修改成功');
+      navigate('/settings');
+    } catch (error) {
+      toast.error(error.message || '密码修改失败');
+    }
+  };
+
+  return (
+    <div className="max-w-md mx-auto">
+      <h1 className="text-2xl font-bold mb-6">修改密码</h1>
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        {/* 旧密码、新密码、确认密码字段 */}
+        <Button type="submit">确认修改</Button>
+      </form>
+    </div>
+  );
+};
+
+// 测试用例: TC-AUTH-053~060
+```
+
+### 21.6 会话管理与 Token 刷新
+
+```typescript
+// stores/authStore.ts
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import { authApi } from '@/api/auth';
+
+interface AuthState {
+  user: UserInfo | null;
+  token: string | null;
+  isAuthenticated: boolean;
+  isLoading: boolean;
+  
+  login: (credentials: LoginRequest) => Promise<void>;
+  logout: () => Promise<void>;
+  register: (data: RegisterRequest) => Promise<void>;
+  changePassword: (data: ChangePasswordRequest) => Promise<void>;
+  refreshToken: () => Promise<void>;
+  checkSession: () => Promise<void>;
+}
+
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set, get) => ({
+      user: null,
+      token: null,
+      isAuthenticated: false,
+      isLoading: false,
+
+      login: async (credentials) => {
+        set({ isLoading: true });
+        try {
+          const response = await authApi.login(credentials);
+          set({
+            user: response.user,
+            token: response.token,
+            isAuthenticated: true
+          });
+          // 启动 token 刷新定时器
+          scheduleTokenRefresh(response.expiresAt);
+        } finally {
+          set({ isLoading: false });
+        }
+      },
+
+      logout: async () => {
+        try {
+          await authApi.logout();
+        } finally {
+          set({ user: null, token: null, isAuthenticated: false });
+        }
+      },
+
+      refreshToken: async () => {
+        const response = await authApi.refreshToken();
+        set({ token: response.token });
+        scheduleTokenRefresh(response.expiresAt);
+      },
+
+      checkSession: async () => {
+        const token = get().token;
+        if (token) {
+          try {
+            const user = await authApi.getCurrentUser();
+            set({ user, isAuthenticated: true });
+          } catch {
+            set({ user: null, token: null, isAuthenticated: false });
+          }
+        }
+      }
+    }),
+    {
+      name: 'auth-storage',
+      partialize: (state) => ({ token: state.token })
+    }
+  )
+);
+
+function scheduleTokenRefresh(expiresAt: string) {
+  const expiresTime = new Date(expiresAt).getTime();
+  const refreshTime = expiresTime - 5 * 60 * 1000; // 提前 5 分钟刷新
+  const delay = refreshTime - Date.now();
+  
+  if (delay > 0) {
+    setTimeout(() => {
+      useAuthStore.getState().refreshToken();
+    }, delay);
+  }
+}
+
+// 测试用例: TC-AUTH-031~040
+```
+
+---
+
+## 22. 非功能需求支持
+
+### 22.1 性能优化
+
+```typescript
+// components/common/VirtualizedList.tsx
+import { useVirtualizer } from '@tanstack/react-virtual';
+
+interface VirtualizedListProps<T> {
+  data: T[];
+  rowHeight: number;
+  renderRow: (item: T, index: number) => React.ReactNode;
+}
+
+export const VirtualizedList = <T,>({ data, rowHeight, renderRow }: VirtualizedListProps<T>) => {
+  const parentRef = useRef<HTMLDivElement>(null);
+  
+  const virtualizer = useVirtualizer({
+    count: data.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => rowHeight,
+    overscan: 5
+  });
+
+  return (
+    <div ref={parentRef} className="h-[600px] overflow-auto">
+      <div
+        style={{
+          height: `${virtualizer.getTotalSize()}px`,
+          width: '100%',
+          position: 'relative'
+        }}
+      >
+        {virtualizer.getVirtualItems().map((virtualRow) => (
+          <div
+            key={virtualRow.key}
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: `${virtualRow.size}px`,
+              transform: `translateY(${virtualRow.start}px)`
+            }}
+          >
+            {renderRow(data[virtualRow.index], virtualRow.index)}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// 大列表（>100条）使用虚拟列表优化
+// 测试用例: TC-NFR-001
+```
+
+### 22.2 安全措施
+
+```typescript
+// utils/security.ts
+
+// XSS 防护：输入内容转义
+export function escapeHtml(str: string): string {
+  const escapeMap: Record<string, string> = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#x27;'
+  };
+  return str.replace(/[&<>"']/g, (char) => escapeMap[char]);
+}
+
+// CSRF Token 管理
+export function getCsrfToken(): string {
+  return document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ?? '';
+}
+
+// 请求拦截器自动添加 CSRF Token
+apiClient.interceptors.request.use((config) => {
+  const csrfToken = getCsrfToken();
+  if (csrfToken) {
+    config.headers['X-CSRF-Token'] = csrfToken;
+  }
+  return config;
+});
+
+// 敏感操作二次确认
+export async function requireReauth(): Promise<boolean> {
+  // 敏感操作前要求重新输入密码
+  return new Promise((resolve) => {
+    // 显示密码确认对话框
+  });
+}
+
+// 测试用例: TC-NFR-006~009
+```
+
+### 22.3 响应式与多浏览器兼容
+
+```typescript
+// hooks/useResponsive.ts
+export function useResponsive() {
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const [isTablet, setIsTablet] = useState(window.innerWidth >= 768 && window.innerWidth < 1024);
+  const [isDesktop, setIsDesktop] = useState(window.innerWidth >= 1024);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+      setIsTablet(window.innerWidth >= 768 && window.innerWidth < 1024);
+      setIsDesktop(window.innerWidth >= 1024);
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  return { isMobile, isTablet, isDesktop };
+}
+
+// 移动端适配
+export const MobileSidebar = () => {
+  const { isMobile } = useResponsive();
+  
+  if (!isMobile) return null;
+  
+  return <DrawerSidebar />;
+};
+
+// 测试用例: TC-NFR-010~012
+```
+
+---
+
+## 23. 测试用例覆盖率矩阵（更新）
+
+| 模块 | 测试用例数 | 前端覆盖 | 关键实现 |
+|------|-----------|---------|---------|
+| **需求管理** | 76 | ✅ 100% | 列表、创建、编辑、删除、并发控制、字段校验、权限控制 |
+| **状态流转** | 32 | ✅ 100% | 状态机、下拉框联动、终态限制、自动联动 |
+| **项目管理** | 16 | ✅ 100% | CRUD、删除约束、编码校验 |
+| **机器人配置** | 15 | ✅ 100% | 强制测试、级联删除、Webhook 校验 |
+| **通知管理** | 19 | ✅ 100% | 列表、筛选、重试状态显示 |
+| **用户管理** | 9 | ✅ 100% | CRUD、删除约束、禁用联动 |
+| **用户认证** | 72 | ✅ 100% | 登录、注册、找回密码、修改密码、会话管理、Token刷新 |
+| **非功能需求** | 13 | ✅ 100% | 性能优化、安全措施、响应式兼容 |
+| **合计** | **~252** | **100%** | |
 
 ---
 
