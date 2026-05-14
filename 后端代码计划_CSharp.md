@@ -1596,6 +1596,925 @@ CREATE INDEX IX_NotificationLogs_CreatedAt ON NotificationLogs(CreatedAt DESC);
 3. 明确部署环境要求
 4. 补充API接口详细文档
 
+---
+
+## 22. 用户认证模块详细设计
+
+> 对应测试用例 TC-AUTH-001 ~ TC-AUTH-072，覆盖注册/登录/改密/找回/会话/安全/UI 全流程
+
+### 22.1 用户认证 API
+
+| 方法 | 端点 | 描述 | 权限 |
+|------|------|------|------|
+| POST | /api/auth/register | 用户自主注册 | 公开 |
+| POST | /api/auth/login | 用户登录 | 公开 |
+| POST | /api/auth/logout | 用户登出 | 已登录 |
+| POST | /api/auth/refresh | 刷新Token | 公开 |
+| POST | /api/auth/forgot-password | 忘记密码-发送验证码 | 公开 |
+| POST | /api/auth/reset-password | 重置密码 | 公开 |
+| POST | /api/auth/change-password | 修改密码（已登录） | 已登录 |
+| GET | /api/auth/me | 获取当前用户信息 | 已登录 |
+| PUT | /api/auth/profile | 更新个人资料 | 已登录 |
+
+### 22.2 用户实体扩展
+
+```csharp
+public class User
+{
+    public int Id { get; set; }
+    public string Username { get; set; }              // 唯一，最小4字符
+    public string RealName { get; set; }               // 必填
+    public string PasswordHash { get; set; }           // bcrypt加密
+    public UserRole Role { get; set; }                 // 管理员/开发人员/测试人员
+    public string? Phone { get; set; }                  // 唯一
+    public string? Email { get; set; }                 // 可选，唯一
+    public UserStatus Status { get; set; }             // 待启用/启用/禁用
+    public bool IsFirstLogin { get; set; }            // 首次登录标记
+    public int FailedLoginCount { get; set; }          // 登录失败计数
+    public DateTime? LockedUntil { get; set; }         // 锁定截止时间
+    public DateTime? LastLoginAt { get; set; }         // 最后登录时间
+    public DateTime CreatedAt { get; set; }
+    public DateTime? DeletedAt { get; set; }
+}
+
+public enum UserStatus
+{
+    Pending = 0,   // 待启用
+    Active = 1,    // 启用
+    Disabled = 2   // 禁用
+}
+```
+
+### 22.3 注册流程实现
+
+```csharp
+public class RegisterCommandHandler : IRequestHandler<RegisterCommand, Result<AuthResponse>>
+{
+    public async Task<Result<AuthResponse>> Handle(RegisterCommand command)
+    {
+        // 1. 校验用户名唯一性
+        if (await _userRepo.ExistsByUsernameAsync(command.Username))
+            return Result.BadRequest("用户名已存在");
+
+        // 2. 校验手机号唯一性
+        if (await _userRepo.ExistsByPhoneAsync(command.Phone))
+            return Result.BadRequest("该手机号已注册");
+
+        // 3. 校验邮箱唯一性（如填写）
+        if (!string.IsNullOrEmpty(command.Email) && 
+            await _userRepo.ExistsByEmailAsync(command.Email))
+            return Result.BadRequest("该邮箱已注册");
+
+        // 4. 创建用户
+        var user = new User
+        {
+            Username = command.Username,
+            RealName = command.RealName,
+            PasswordHash = _passwordHasher.Hash(command.Password),
+            Phone = command.Phone,
+            Email = command.Email,
+            Role = UserRole.Developer,  // 默认开发人员角色
+            Status = UserStatus.Pending,  // 待启用
+            IsFirstLogin = true,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        await _userRepo.CreateAsync(user);
+
+        return Result.Success(new AuthResponse
+        {
+            Message = "注册成功，请等待管理员启用账号"
+        });
+    }
+}
+
+public class RegisterCommand : IRequest<Result<AuthResponse>>
+{
+    public string Username { get; set; }      // 必填，最小4字符
+    public string Password { get; set; }      // 必填，至少8位，含大小写字母和数字
+    public string ConfirmPassword { get; set; }
+    public string RealName { get; set; }       // 必填
+    public string Phone { get; set; }          // 必填
+    public string? Email { get; set; }         // 可选
+}
+```
+
+### 22.4 登录流程实现
+
+```csharp
+public class LoginCommandHandler : IRequestHandler<LoginCommand, Result<TokenResponse>>
+{
+    public async Task<Result<TokenResponse>> Handle(LoginCommand command)
+    {
+        // 1. 查找用户
+        var user = await _userRepo.GetByUsernameAsync(command.Username);
+        if (user == null)
+        {
+            await _logService.LogFailedLogin(command.Username, "用户不存在");
+            return Result.Unauthorized("用户名或密码错误");
+        }
+
+        // 2. 检查账号状态
+        if (user.Status == UserStatus.Disabled)
+            return Result.Unauthorized("账号已被禁用");
+
+        if (user.Status == UserStatus.Pending)
+            return Result.Unauthorized("账号尚未启用，请联系管理员");
+
+        // 3. 检查是否被锁定
+        if (user.LockedUntil.HasValue && user.LockedUntil > DateTime.UtcNow)
+        {
+            var remainingMinutes = (int)(user.LockedUntil.Value - DateTime.UtcNow).TotalMinutes;
+            return Result.Unauthorized($"账号已锁定，请 {remainingMinutes} 分钟后再试");
+        }
+
+        // 4. 验证密码
+        if (!_passwordHasher.Verify(command.Password, user.PasswordHash))
+        {
+            user.FailedLoginCount++;
+            if (user.FailedLoginCount >= 5)
+            {
+                user.LockedUntil = DateTime.UtcNow.AddMinutes(30);
+                await _logService.LogAccountLocked(user);
+            }
+            await _userRepo.UpdateAsync(user);
+            await _logService.LogFailedLogin(user.Username, "密码错误");
+            return Result.Unauthorized("用户名或密码错误");
+        }
+
+        // 5. 登录成功，重置计数
+        user.FailedLoginCount = 0;
+        user.LockedUntil = null;
+        user.LastLoginAt = DateTime.UtcNow;
+        await _userRepo.UpdateAsync(user);
+
+        // 6. 生成Token
+        var accessToken = _tokenService.GenerateAccessToken(user);
+        var refreshToken = _tokenService.GenerateRefreshToken(user);
+        var expiresIn = command.RememberMe ? 30 * 24 * 3600 : 7 * 24 * 3600;  // 30天或7天
+
+        await _logService.LogSuccessfulLogin(user);
+
+        return Result.Success(new TokenResponse
+        {
+            AccessToken = accessToken,
+            RefreshToken = refreshToken,
+            ExpiresIn = expiresIn,
+            TokenType = "Bearer",
+            RequiresPasswordChange = user.IsFirstLogin,
+            User = MapUserDto(user)
+        });
+    }
+}
+```
+
+### 22.5 首次登录强制改密
+
+```csharp
+public class ChangePasswordCommandHandler : IRequestHandler<ChangePasswordCommand, Result>
+{
+    public async Task<Result> Handle(ChangePasswordCommand command)
+    {
+        var user = await _userContext.GetCurrentUserAsync();
+
+        // 验证当前密码
+        if (!_passwordHasher.Verify(command.CurrentPassword, user.PasswordHash))
+            return Result.BadRequest("当前密码错误");
+
+        // 新密码不能与当前密码相同
+        if (_passwordHasher.Verify(command.NewPassword, user.PasswordHash))
+            return Result.BadRequest("新密码不能与当前密码相同");
+
+        // 更新密码
+        user.PasswordHash = _passwordHasher.Hash(command.NewPassword);
+        user.IsFirstLogin = false;
+        await _userRepo.UpdateAsync(user);
+
+        return Result.Success("密码修改成功");
+    }
+}
+
+// 首次登录改密专用
+public class FirstLoginChangePasswordCommandHandler : IRequestHandler<FirstLoginChangePasswordCommand, Result>
+{
+    public async Task<Result> Handle(FirstLoginChangePasswordCommand command)
+    {
+        var user = await _userContext.GetCurrentUserAsync();
+
+        if (!user.IsFirstLogin)
+            return Result.BadRequest("无需修改密码");
+
+        if (!_passwordHasher.Verify(command.CurrentPassword, user.PasswordHash))
+            return Result.BadRequest("当前密码错误");
+
+        user.PasswordHash = _passwordHasher.Hash(command.NewPassword);
+        user.IsFirstLogin = false;
+        await _userRepo.UpdateAsync(user);
+
+        return Result.Success();
+    }
+}
+```
+
+### 22.6 密码找回流程
+
+```csharp
+public class ForgotPasswordCommandHandler : IRequestHandler<ForgotPasswordCommand, Result>
+{
+    private readonly IEmailService _emailService;
+    private readonly IVerificationCodeService _codeService;
+
+    public async Task<Result> Handle(ForgotPasswordCommand command)
+    {
+        // 1. 查找用户
+        var user = await _userRepo.GetByEmailAsync(command.Email);
+        if (user == null)
+            return Result.BadRequest("该邮箱未注册");
+
+        // 2. 检查是否未绑定邮箱（通过用户名查找）
+        if (string.IsNullOrEmpty(user.Email))
+            return Result.BadRequest("该账号未绑定邮箱，请联系管理员重置密码");
+
+        // 3. 检查发送频率（每分钟1次）
+        if (_codeService.IsRateLimited(command.Email, TimeSpan.FromMinutes(1)))
+            return Result.BadRequest("验证码获取过于频繁，请稍后再试");
+
+        // 4. 检查每日发送次数（最多10次）
+        if (_codeService.IsDailyLimitReached(command.Email, 10))
+            return Result.BadRequest("验证码获取次数超限，请明天再试");
+
+        // 5. 生成6位数字验证码
+        var code = _codeService.GenerateCode(6);
+        await _codeService.SaveCodeAsync(command.Email, code, TimeSpan.FromMinutes(5));
+
+        // 6. 发送邮件
+        await _emailService.SendAsync(command.Email, "密码找回验证码", $"验证码：{code}，5分钟内有效");
+
+        return Result.Success(new { message = "验证码已发送" });
+    }
+}
+
+public class ResetPasswordCommandHandler : IRequestHandler<ResetPasswordCommand, Result>
+{
+    public async Task<Result> Handle(ResetPasswordCommand command)
+    {
+        // 1. 验证验证码
+        var isValid = await _codeService.VerifyAsync(command.Email, command.Code);
+        if (!isValid)
+            return Result.BadRequest("验证码错误，请重新获取");
+
+        // 2. 查找用户
+        var user = await _userRepo.GetByEmailAsync(command.Email);
+        if (user == null)
+            return Result.BadRequest("该邮箱未注册");
+
+        // 3. 更新密码
+        user.PasswordHash = _passwordHasher.Hash(command.NewPassword);
+        user.IsFirstLogin = false;  // 重置密码后清除首次登录标记
+        await _userRepo.UpdateAsync(user);
+
+        // 4. 使验证码失效
+        await _codeService.InvalidateAsync(command.Email);
+
+        return Result.Success("密码重置成功");
+    }
+}
+```
+
+### 22.7 Token 管理
+
+```csharp
+public class TokenService : ITokenService
+{
+    private readonly JwtSettings _settings;
+
+    public string GenerateAccessToken(User user)
+    {
+        var claims = new[]
+        {
+            new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
+            new Claim(JwtRegisteredClaimNames.UniqueName, user.Username),
+            new Claim(ClaimTypes.Role, user.Role.ToString()),
+            new Claim("firstLogin", user.IsFirstLogin.ToString()),
+            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+        };
+
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_settings.SecretKey));
+        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+        var token = new JwtSecurityToken(
+            issuer: _settings.Issuer,
+            audience: _settings.Audience,
+            claims: claims,
+            expires: DateTime.UtcNow.AddHours(_settings.AccessTokenExpirationHours),
+            signingCredentials: creds);
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    public string GenerateRefreshToken(User user)
+    {
+        var claims = new[]
+        {
+            new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
+            new Claim("type", "refresh")
+        };
+
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(_settings.SecretKey));
+        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+        var token = new JwtSecurityToken(
+            issuer: _settings.Issuer,
+            audience: _settings.Audience,
+            claims: claims,
+            expires: DateTime.UtcNow.AddDays(30),  // 30天有效期
+            signingCredentials: creds);
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    public (bool isValid, int userId) ValidateRefreshToken(string refreshToken)
+    {
+        // 验证逻辑...
+    }
+}
+```
+
+### 22.8 密码验证规则
+
+```csharp
+public class PasswordValidator
+{
+    public (bool isValid, string? errorMessage) Validate(string password)
+    {
+        if (string.IsNullOrEmpty(password))
+            return (false, "请填写密码");
+
+        if (password.Length < 8)
+            return (false, "密码至少8位");
+
+        if (!password.Any(char.IsUpper))
+            return (false, "密码必须包含大写字母");
+
+        if (!password.Any(char.IsLower))
+            return (false, "密码必须包含小写字母");
+
+        if (!password.Any(char.IsDigit))
+            return (false, "密码必须包含数字");
+
+        return (true, null);
+    }
+}
+```
+
+---
+
+## 23. 项目管理增强设计
+
+### 23.1 项目编码校验
+
+```csharp
+public class ProjectCodeValidator
+{
+    public (bool isValid, string? errorMessage) Validate(string? code)
+    {
+        if (string.IsNullOrEmpty(code))
+            return (true, null);  // 编码可选
+
+        if (code.Length > 50)
+            return (false, "项目编码最多50个字符");
+
+        if (!Regex.IsMatch(code, @"^[A-Za-z0-9_-]+$"))
+            return (false, "项目编码只能包含字母、数字、下划线和连字符");
+
+        return (true, null);
+    }
+}
+```
+
+### 23.2 项目删除约束
+
+```csharp
+public class DeleteProjectCommandHandler : IRequestHandler<DeleteProjectCommand, Result>
+{
+    public async Task<Result> Handle(DeleteProjectCommand command)
+    {
+        var project = await _projectRepo.GetByIdAsync(command.Id);
+        if (project == null)
+            return Result.NotFound("项目不存在");
+
+        var requirementCount = await _requirementRepo.CountByProjectIdAsync(command.Id);
+        if (requirementCount > 0)
+            return Result.BadRequest($"该项目下存在 {requirementCount} 条需求，无法删除。请先删除或转移这些需求后再删除项目");
+
+        await _projectRepo.DeleteAsync(command.Id);
+
+        return Result.Success();
+    }
+}
+```
+
+### 23.3 项目列表与详情
+
+```csharp
+public class GetProjectsQueryHandler : IRequestHandler<GetProjectsQuery, Result<PagedList<ProjectDto>>>
+{
+    public async Task<Result<PagedList<ProjectDto>>> Handle(GetProjectsQuery query)
+    {
+        var projects = await _projectRepo.GetAllAsync();
+
+        if (!string.IsNullOrEmpty(query.Search))
+            projects = projects.Where(p => p.Name.Contains(query.Search) || 
+                                           (p.Code != null && p.Code.Contains(query.Search)));
+
+        var total = projects.Count();
+        var items = projects
+            .OrderByDescending(p => p.CreatedAt)
+            .Skip((query.PageIndex - 1) * query.PageSize)
+            .Take(query.PageSize)
+            .Select(MapToDto)
+            .ToList();
+
+        return Result.Success(new PagedList<ProjectDto>
+        {
+            Items = items,
+            TotalCount = total,
+            PageIndex = query.PageIndex,
+            PageSize = query.PageSize
+        });
+    }
+}
+```
+
+---
+
+## 24. 机器人配置增强设计
+
+### 24.1 Webhook URL 校验
+
+```csharp
+public class WebhookUrlValidator
+{
+    public (bool isValid, string? errorMessage) Validate(string? webhookUrl)
+    {
+        if (string.IsNullOrEmpty(webhookUrl))
+            return (false, "请填写Webhook地址");
+
+        if (!Uri.TryCreate(webhookUrl, UriKind.Absolute, out var uri))
+            return (false, "请输入有效的Webhook地址");
+
+        if (!webhookUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            return (false, "Webhook地址必须为HTTPS");
+
+        // 验证是否为合法的企业微信Webhook格式
+        if (!webhookUrl.Contains("qyapi.weixin.qq.com"))
+            return (false, "Webhook地址格式不正确");
+
+        return (true, null);
+    }
+}
+```
+
+### 24.2 机器人测试连接
+
+```csharp
+public class TestRobotConnectionCommandHandler : IRequestHandler<TestRobotConnectionCommand, Result<bool>>
+{
+    public async Task<Result<bool>> Handle(TestRobotConnectionCommand command)
+    {
+        var validation = _webhookValidator.Validate(command.WebhookUrl);
+        if (!validation.isValid)
+            return Result.BadRequest(validation.errorMessage);
+
+        try
+        {
+            var response = await _httpClient.PostAsJsonAsync(command.WebhookUrl, new
+            {
+                msgtype = "text",
+                text = new { content = "测试消息：这是一条来自需求跟踪管理系统的测试消息" }
+            });
+
+            if (response.IsSuccessStatusCode)
+                return Result.Success(true);
+
+            var errorContent = await response.Content.ReadAsStringAsync();
+            return Result.BadRequest($"测试连接失败：{errorContent}");
+        }
+        catch (Exception ex)
+        {
+            return Result.BadRequest($"测试连接失败：{ex.Message}");
+        }
+    }
+}
+```
+
+### 24.3 机器人启用/禁用
+
+```csharp
+public class ToggleRobotStatusCommandHandler : IRequestHandler<ToggleRobotStatusCommand, Result>
+{
+    public async Task<Result> Handle(ToggleRobotStatusCommand command)
+    {
+        var robot = await _robotRepo.GetByIdAsync(command.Id);
+        if (robot == null)
+            return Result.NotFound("机器人不存在");
+
+        robot.IsEnabled = command.IsEnabled;
+        await _robotRepo.UpdateAsync(robot);
+
+        return Result.Success();
+    }
+}
+```
+
+---
+
+## 25. 用户管理增强设计
+
+### 25.1 用户删除约束
+
+```csharp
+public class DeleteUserCommandHandler : IRequestHandler<DeleteUserCommand, Result>
+{
+    public async Task<Result> Handle(DeleteUserCommand command)
+    {
+        var user = await _userRepo.GetByIdAsync(command.Id);
+        if (user == null)
+            return Result.NotFound("用户不存在");
+
+        // 检查是否为初始管理员
+        if (user.Role == UserRole.Admin && user.IsInitialAdmin)
+            return Result.BadRequest("初始管理员账号无法删除");
+
+        var requirementCount = await _requirementRepo.CountByFollowerIdAsync(command.Id);
+        if (requirementCount > 0)
+            return Result.BadRequest($"该用户是 {requirementCount} 条需求的跟进人，无法删除。请先变更这些需求的跟进人后再删除用户");
+
+        // 软删除
+        user.DeletedAt = DateTime.UtcNow;
+        user.IsEnabled = false;
+        await _userRepo.UpdateAsync(user);
+
+        return Result.Success();
+    }
+}
+```
+
+### 25.2 用户禁用联动
+
+```csharp
+public class DisableUserCommandHandler : IRequestHandler<DisableUserCommand, Result>
+{
+    public async Task<Result> Handle(DisableUserCommand command)
+    {
+        var user = await _userRepo.GetByIdAsync(command.Id);
+        if (user == null)
+            return Result.NotFound("用户不存在");
+
+        // 检查是否为初始管理员
+        if (user.IsInitialAdmin)
+            return Result.BadRequest("初始管理员账号无法禁用");
+
+        user.IsEnabled = false;
+        await _userRepo.UpdateAsync(user);
+
+        // 被禁用用户的所有活跃会话失效
+        await _sessionService.InvalidateUserSessionsAsync(command.Id);
+
+        return Result.Success();
+    }
+}
+```
+
+### 25.3 跟进人下拉列表过滤
+
+```csharp
+public class GetActiveUsersQueryHandler : IRequestHandler<GetActiveUsersQuery, Result<List<UserDto>>>
+{
+    public async Task<Result<List<UserDto>>> Handle(GetActiveUsersQuery query)
+    {
+        var users = await _userRepo.GetActiveUsersAsync();
+        return Result.Success(users.Select(MapToDto).ToList());
+    }
+}
+```
+
+---
+
+## 26. 通知管理增强设计
+
+### 26.1 提醒类型定义
+
+```csharp
+public class ReminderType
+{
+    public const string TestReminder = "交测";    // 计划交测时间提醒
+    public const string LaunchReminder = "上线"; // 计划上线时间提醒
+}
+
+public class ReminderMessageBuilder
+{
+    public string BuildTestReminder(Requirement req, int daysRemaining)
+    {
+        var daysText = daysRemaining switch
+        {
+            0 => "当天",
+            1 => "1天",
+            _ => $"{daysRemaining}天"
+        };
+
+        return $@"【需求交测提醒】
+需求名称：{req.Name}
+需求号：{req.RequirementNo}
+到期类型：交测
+计划交测时间：{req.PlanTestDate:yyyy-MM-dd}
+剩余时间：{daysText}
+跟进人：{req.Follower?.RealName}
+优先级：{GetPriorityName(req.Priority)}";
+    }
+
+    public string BuildLaunchReminder(Requirement req, int daysRemaining)
+    {
+        var daysText = daysRemaining switch
+        {
+            0 => "当天",
+            1 => "1天",
+            _ => $"{daysRemaining}天"
+        };
+
+        return $@"【需求上线提醒】
+需求名称：{req.Name}
+需求号：{req.RequirementNo}
+到期类型：上线
+计划上线时间：{req.PlanLaunchDate:yyyy-MM-dd}
+剩余时间：{daysText}
+跟进人：{req.Follower?.RealName}
+优先级：{GetPriorityName(req.Priority)}";
+    }
+}
+```
+
+### 26.2 通知日志查询
+
+```csharp
+public class GetNotificationLogsQueryHandler : IRequestHandler<GetNotificationLogsQuery, Result<PagedList<NotificationLogDto>>>
+{
+    public async Task<Result<PagedList<NotificationLogDto>>> Handle(GetNotificationLogsQuery query)
+    {
+        var logs = await _notificationLogRepo.GetAllAsync();
+
+        // 按时间范围筛选
+        if (query.StartDate.HasValue)
+            logs = logs.Where(l => l.CreatedAt >= query.StartDate.Value);
+        if (query.EndDate.HasValue)
+            logs = logs.Where(l => l.CreatedAt <= query.EndDate.Value);
+
+        // 按状态筛选
+        if (query.Status.HasValue)
+            logs = logs.Where(l => l.Status == query.Status.Value);
+
+        // 按需求号搜索
+        if (!string.IsNullOrEmpty(query.RequirementNo))
+            logs = logs.Where(l => l.Requirement.RequirementNo.Contains(query.RequirementNo));
+
+        var total = logs.Count();
+        var items = logs
+            .OrderByDescending(l => l.CreatedAt)
+            .Skip((query.PageIndex - 1) * query.PageSize)
+            .Take(query.PageSize)
+            .Select(MapToDto)
+            .ToList();
+
+        return Result.Success(new PagedList<NotificationLogDto>
+        {
+            Items = items,
+            TotalCount = total,
+            PageIndex = query.PageIndex,
+            PageSize = query.PageSize
+        });
+    }
+}
+```
+
+---
+
+## 27. 非功能需求设计
+
+### 27.1 性能优化
+
+```csharp
+// 数据库索引优化
+public class RequirementIndexConfiguration : IEntityTypeConfiguration<Requirement>
+{
+    public void Configure(EntityTypeBuilder<Requirement> builder)
+    {
+        builder.HasIndex(r => r.Status);
+        builder.HasIndex(r => r.FollowerId);
+        builder.HasIndex(r => r.ProjectId);
+        builder.HasIndex(r => r.PlanTestDate);
+        builder.HasIndex(r => r.PlanLaunchDate);
+        builder.HasIndex(r => r.CreatedAt).IsDescending();
+        builder.HasIndex(r => r.RequirementNo).IsUnique();
+    }
+}
+
+// 查询分页优化（避免 OFFSET 性能问题，使用 Keyset Pagination）
+public class GetRequirementsQueryHandler
+{
+    public async Task<Result<PagedList<RequirementDto>>> Handle(GetRequirementsQuery query)
+    {
+        var baseQuery = _requirementRepo.Query()
+            .AsNoTracking();
+
+        // 预加载关联数据，减少 N+1 查询
+        baseQuery = baseQuery
+            .Include(r => r.Follower)
+            .Include(r => r.Project)
+            .Include(r => r.Robot)
+            .AsSplitQuery();
+
+        // 动态构建查询
+        if (query.Status.HasValue)
+            baseQuery = baseQuery.Where(r => r.Status == query.Status.Value);
+
+        if (query.FollowerId.HasValue)
+            baseQuery = baseQuery.Where(r => r.FollowerId == query.FollowerId.Value);
+
+        // 排序优化
+        var orderedQuery = query.SortOrder?.ToLower() == "desc"
+            ? baseQuery.OrderByDescending(GetSortExpression(query.SortBy))
+            : baseQuery.OrderBy(GetSortExpression(query.SortBy));
+
+        var total = await baseQuery.CountAsync();
+
+        var items = await orderedQuery
+            .Skip((query.PageIndex - 1) * query.PageSize)
+            .Take(query.PageSize)
+            .Select(r => new RequirementDto { /* mapping */ })
+            .ToListAsync();
+
+        return Result.Success(new PagedList<RequirementDto>
+        {
+            Items = items,
+            TotalCount = total,
+            PageIndex = query.PageIndex,
+            PageSize = query.PageSize
+        });
+    }
+}
+```
+
+### 27.2 安全设计
+
+```csharp
+public class SecurityHeadersMiddleware
+{
+    public async Task InvokeAsync(HttpContext context)
+    {
+        context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
+        context.Response.Headers.Append("X-Frame-Options", "DENY");
+        context.Response.Headers.Append("X-XSS-Protection", "1; mode=block");
+        context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
+
+        // CORS
+        context.Response.Headers.Append("Access-Control-Allow-Origin", _corsOrigins);
+        context.Response.Headers.Append("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+        context.Response.Headers.Append("Access-Control-Allow-Headers", "Authorization, Content-Type");
+
+        await _next(context);
+    }
+}
+
+// 密码加密
+public class PasswordHasher : IPasswordHasher
+{
+    private const int WorkFactor = 12;  // bcrypt cost factor
+
+    public string Hash(string password)
+    {
+        return BCrypt.Net.BCrypt.HashPassword(password, WorkFactor);
+    }
+
+    public bool Verify(string password, string hash)
+    {
+        return BCrypt.Net.BCrypt.Verify(password, hash);
+    }
+}
+```
+
+### 27.3 操作日志
+
+```csharp
+public class AuditLogService : IAuditLogService
+{
+    public async Task LogAsync(AuditLogEntry entry)
+    {
+        var log = new AuditLog
+        {
+            UserId = entry.UserId,
+            Action = entry.Action,
+            EntityType = entry.EntityType,
+            EntityId = entry.EntityId,
+            IpAddress = entry.IpAddress,
+            UserAgent = entry.UserAgent,
+            OldValue = entry.OldValue,
+            NewValue = entry.NewValue,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        await _auditLogRepo.CreateAsync(log);
+    }
+}
+
+// 操作类型枚举
+public enum AuditAction
+{
+    Create,
+    Update,
+    Delete,
+    Login,
+    Logout,
+    ChangePassword,
+    ResetPassword,
+    EnableUser,
+    DisableUser,
+    DeleteRobot
+}
+```
+
+---
+
+## 28. 测试覆盖映射
+
+### 28.1 测试用例与代码实现映射
+
+| 测试用例编号 | 覆盖模块 | 关键实现点 |
+|-------------|----------|-----------|
+| TC-AUTH-001 ~ 020 | 注册功能 | RegisterCommandHandler、字段校验 |
+| TC-AUTH-021 ~ 028 | 登录功能 | LoginCommandHandler、Token生成 |
+| TC-AUTH-029 ~ 035 | 首次改密 | FirstLoginChangePasswordCommandHandler |
+| TC-AUTH-036 ~ 044 | 密码找回 | ForgotPasswordCommandHandler、验证码服务 |
+| TC-AUTH-045 ~ 047 | 已登录改密 | ChangePasswordCommandHandler |
+| TC-AUTH-048 ~ 053 | 会话管理 | TokenService、RefreshToken |
+| TC-AUTH-054 ~ 060 | 安全机制 | 账户锁定、失败计数 |
+| TC-AUTH-061 ~ 066 | 管理员初始化 | 初始管理员创建、强制改密 |
+| TC-AUTH-067 ~ 072 | UI 交互 | 前端表单校验 |
+| TC-BOT-001 ~ 015 | 机器人配置 | RobotService、Webhook校验、测试连接 |
+| TC-NOTIFY-001 ~ 019 | 通知管理 | WeChatWorkNotifier、重试服务、提醒服务 |
+| TC-USER-001 ~ 009 | 用户管理 | UserService、删除约束、禁用联动 |
+| TC-PROJ-001 ~ 016 | 项目管理 | ProjectService、编码校验、删除约束 |
+| TC-NFR-001 ~ 009 | 非功能需求 | 性能优化、安全设计、操作日志 |
+
+---
+
+## 29. 配置文件补充
+
+```json
+{
+  "Authentication": {
+    "Jwt": {
+      "SecretKey": "your-256-bit-secret-key-here-min-32-chars",
+      "Issuer": "RequirementTrackingSystem",
+      "Audience": "RequirementTrackingSystem",
+      "AccessTokenExpirationHours": 2,
+      "RefreshTokenExpirationDays": 30
+    },
+    "Password": {
+      "MinLength": 8,
+      "RequireUppercase": true,
+      "RequireLowercase": true,
+      "RequireDigit": true
+    },
+    "AccountLockout": {
+      "MaxFailedAttempts": 5,
+      "LockoutDurationMinutes": 30
+    },
+    "VerificationCode": {
+      "ExpirationMinutes": 5,
+      "MaxPerDay": 10,
+      "RateLimitSeconds": 60
+    }
+  },
+  "Email": {
+    "SmtpHost": "smtp.example.com",
+    "SmtpPort": 587,
+    "UseSsl": true,
+    "Username": "noreply@example.com",
+    "Password": "your-email-password"
+  },
+  "Security": {
+    "AllowedCorsOrigins": ["http://localhost:3000"],
+    "EnableHsts": true
+  },
+  "AuditLog": {
+    "Enabled": true,
+    "RetainDays": 90
+  }
+}
+```
+
+---
+
 如需进一步细化某个模块的实现细节，请告知。
 
 ---
