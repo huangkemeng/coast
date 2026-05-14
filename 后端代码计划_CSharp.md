@@ -4751,6 +4751,1998 @@ RequirementTrackingSystem/
 
 ---
 
+## 23. 项目管理模块完整实现计划
+
+> 对应测试用例：TC-PROJ-001 ~ TC-PROJ-016
+
+### 23.1 项目实体定义
+
+```csharp
+public class Project
+{
+    public int Id { get; set; }
+    public string Name { get; set; }                      // 项目名称
+    public string Code { get; set; }                     // 项目编码（唯一）
+    public int? ManagerId { get; set; }                  // 项目负责人
+    public User? Manager { get; set; }
+    public string? Description { get; set; }             // 项目描述
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+    
+    public ICollection<Requirement> Requirements { get; set; }  // 关联需求
+}
+
+public class CreateProjectDto
+{
+    public string Name { get; set; }                     // 必填
+    public string Code { get; set; }                     // 可选，自动生成
+    public int? ManagerId { get; set; }                  // 可选
+    public string? Description { get; set; }              // 可选
+}
+
+public class UpdateProjectDto
+{
+    public string Name { get; set; }
+    public int? ManagerId { get; set; }
+    public string? Description { get; set; }
+}
+
+public class ProjectDetailDto
+{
+    public int Id { get; set; }
+    public string Name { get; set; }
+    public string Code { get; set; }
+    public int? ManagerId { get; set; }
+    public string? ManagerName { get; set; }
+    public string? Description { get; set; }
+    public int RequirementCount { get; set; }            // 关联需求数
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+```
+
+### 23.2 项目管理 API
+
+#### 23.2.1 创建项目
+
+```http
+POST /api/projects
+```
+
+**Request**:
+```json
+{
+    "name": "项目A",
+    "code": "PRJ-001",
+    "managerId": 1,
+    "description": "项目描述"
+}
+```
+
+**Response**:
+```json
+{
+    "success": true,
+    "data": {
+        "id": 1,
+        "name": "项目A",
+        "code": "PRJ-001",
+        "managerId": 1,
+        "managerName": "张三",
+        "description": "项目描述",
+        "requirementCount": 0,
+        "createdAt": "2025-01-01T00:00:00Z",
+        "updatedAt": "2025-01-01T00:00:00Z"
+    }
+}
+```
+
+**错误响应**:
+```json
+{
+    "success": false,
+    "message": "请填写项目名称",
+    "errorCode": "VALIDATION_ERROR"
+}
+```
+
+#### 23.2.2 获取项目列表
+
+```http
+GET /api/projects
+```
+
+**Query Parameters**:
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| pageIndex | int | 否 | 页码（默认1） |
+| pageSize | int | 否 | 每页条数（默认20） |
+| keyword | string | 否 | 搜索关键字（项目名/编码） |
+| managerId | int | 否 | 负责人ID |
+
+**Response**:
+```json
+{
+    "success": true,
+    "data": {
+        "items": [
+            {
+                "id": 1,
+                "name": "项目A",
+                "code": "PRJ-001",
+                "managerName": "张三",
+                "requirementCount": 5,
+                "createdAt": "2025-01-01T00:00:00Z"
+            }
+        ],
+        "totalCount": 10,
+        "pageIndex": 1,
+        "pageSize": 20
+    }
+}
+```
+
+#### 23.2.3 获取项目详情
+
+```http
+GET /api/projects/{id}
+```
+
+**Response**:
+```json
+{
+    "success": true,
+    "data": {
+        "id": 1,
+        "name": "项目A",
+        "code": "PRJ-001",
+        "managerId": 1,
+        "managerName": "张三",
+        "description": "项目描述",
+        "requirementCount": 5,
+        "createdAt": "2025-01-01T00:00:00Z",
+        "updatedAt": "2025-01-01T00:00:00Z"
+    }
+}
+```
+
+#### 23.2.4 更新项目
+
+```http
+PUT /api/projects/{id}
+```
+
+**Request**:
+```json
+{
+    "name": "项目A-修改",
+    "managerId": 2,
+    "description": "修改后的描述"
+}
+```
+
+**Response**: HTTP 200 OK，返回更新后的项目详情
+
+#### 23.2.5 删除项目
+
+```http
+DELETE /api/projects/{id}
+```
+
+**成功响应**: HTTP 204 No Content
+
+**失败响应（有关联需求）**:
+```json
+{
+    "success": false,
+    "message": "该项目下存在需求，无法删除",
+    "errorCode": "HAS_RELATED_ENTITIES"
+}
+```
+
+### 23.3 项目服务实现
+
+```csharp
+public class ProjectService : IProjectService
+{
+    private readonly IProjectRepository _projectRepository;
+    private readonly IRequirementRepository _requirementRepository;
+    
+    public async Task<Result<ProjectDetailDto>> CreateAsync(CreateProjectDto dto)
+    {
+        // 1. 参数校验
+        if (string.IsNullOrWhiteSpace(dto.Name))
+            return Result.Fail("请填写项目名称");
+            
+        // 2. 项目名称长度校验
+        if (dto.Name.Length > 100)
+            return Result.Fail("项目名称最多100字");
+            
+        // 3. 项目编码唯一性校验
+        if (!string.IsNullOrWhiteSpace(dto.Code))
+        {
+            if (dto.Code.Length > 50)
+                return Result.Fail("项目编码最多50字");
+                
+            if (await _projectRepository.ExistsByCodeAsync(dto.Code))
+                return Result.Fail("项目编码已存在");
+        }
+        else
+        {
+            // 自动生成编码
+            dto.Code = await GenerateProjectCodeAsync();
+        }
+        
+        // 4. 项目负责人有效性校验
+        if (dto.ManagerId.HasValue)
+        {
+            var manager = await _userRepository.GetByIdAsync(dto.ManagerId.Value);
+            if (manager == null || !manager.IsEnabled)
+                return Result.Fail("项目负责人不存在或已禁用");
+        }
+        
+        // 5. 创建项目
+        var project = new Project
+        {
+            Name = dto.Name,
+            Code = dto.Code,
+            ManagerId = dto.ManagerId,
+            Description = dto.Description,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+        
+        await _projectRepository.AddAsync(project);
+        
+        return Result.Success(MapToDetailDto(project));
+    }
+    
+    public async Task<Result> DeleteAsync(int id)
+    {
+        var project = await _projectRepository.GetByIdAsync(id);
+        if (project == null)
+            return Result.NotFound("项目不存在");
+            
+        // 检查关联需求
+        var requirementCount = await _requirementRepository.CountByProjectIdAsync(id);
+        if (requirementCount > 0)
+            return Result.Fail($"该项目下存在{requirementCount}条需求，无法删除");
+            
+        await _projectRepository.DeleteAsync(id);
+        return Result.Success();
+    }
+    
+    public async Task<Result<ProjectDetailDto>> UpdateAsync(int id, UpdateProjectDto dto)
+    {
+        var project = await _projectRepository.GetByIdAsync(id);
+        if (project == null)
+            return Result.NotFound("项目不存在");
+            
+        // 更新字段
+        if (!string.IsNullOrWhiteSpace(dto.Name))
+            project.Name = dto.Name;
+        if (!string.IsNullOrWhiteSpace(dto.Code))
+        {
+            if (await _projectRepository.ExistsByCodeAsync(dto.Code, id))
+                return Result.Fail("项目编码已存在");
+            project.Code = dto.Code;
+        }
+        project.ManagerId = dto.ManagerId;
+        project.Description = dto.Description;
+        project.UpdatedAt = DateTime.UtcNow;
+        
+        await _projectRepository.UpdateAsync(project);
+        
+        return Result.Success(await MapToDetailDtoAsync(project));
+    }
+    
+    private async Task<string> GenerateProjectCodeAsync()
+    {
+        var today = DateTime.UtcNow;
+        var prefix = $"PRJ-{today:yyyyMM}";
+        var sequence = await _projectRepository.GetNextSequenceAsync(prefix);
+        return $"{prefix}-{sequence:D4}";
+    }
+    
+    private async Task<ProjectDetailDto> MapToDetailDtoAsync(Project project)
+    {
+        var manager = project.ManagerId.HasValue 
+            ? await _userRepository.GetByIdAsync(project.ManagerId.Value) 
+            : null;
+        var requirementCount = await _requirementRepository.CountByProjectIdAsync(project.Id);
+        
+        return new ProjectDetailDto
+        {
+            Id = project.Id,
+            Name = project.Name,
+            Code = project.Code,
+            ManagerId = project.ManagerId,
+            ManagerName = manager?.RealName,
+            Description = project.Description,
+            RequirementCount = requirementCount,
+            CreatedAt = project.CreatedAt,
+            UpdatedAt = project.UpdatedAt
+        };
+    }
+}
+```
+
+### 23.4 项目权限控制
+
+```csharp
+public class ProjectAuthorizationHandler : AuthorizationHandler<OperationRequirement, Project>
+{
+    protected override Task HandleRequirementAsync(
+        AuthorizationHandlerContext context,
+        OperationRequirement requirement,
+        Project resource)
+    {
+        var user = _currentUser.GetCurrentUser();
+        
+        // 项目管理仅管理员可用
+        if (user.Role != UserRole.Admin)
+        {
+            context.Fail();
+            return Task.CompletedTask;
+        }
+        
+        context.Succeed(requirement);
+        return Task.CompletedTask;
+    }
+}
+```
+
+---
+
+## 24. 机器人配置模块完整实现计划
+
+> 对应测试用例：TC-BOT-001 ~ TC-BOT-015
+
+### 24.1 机器人实体定义
+
+```csharp
+public class Robot
+{
+    public int Id { get; set; }
+    public string Name { get; set; }                      // 机器人名称
+    public string WebhookUrl { get; set; }                // Webhook地址（仅HTTPS）
+    public string? GroupName { get; set; }               // 群组名称
+    public bool IsEnabled { get; set; }                   // 是否启用
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+    
+    public ICollection<Requirement> Requirements { get; set; }  // 关联需求
+    public ICollection<NotificationLog> NotificationLogs { get; set; }
+}
+
+public class CreateRobotDto
+{
+    public string Name { get; set; }                     // 必填
+    public string WebhookUrl { get; set; }               // 必填，HTTPS URL
+    public string? GroupName { get; set; }               // 可选
+}
+
+public class UpdateRobotDto
+{
+    public string Name { get; set; }
+    public string WebhookUrl { get; set; }
+    public string? GroupName { get; set; }
+    public bool IsEnabled { get; set; }
+}
+
+public class RobotDetailDto
+{
+    public int Id { get; set; }
+    public string Name { get; set; }
+    public string WebhookUrl { get; set; }
+    public string? GroupName { get; set; }
+    public bool IsEnabled { get; set; }
+    public int RequirementCount { get; set; }            // 关联需求数
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+}
+
+public class RobotTestResultDto
+{
+    public bool Connected { get; set; }
+    public int ResponseTime { get; set; }                // 响应时间（毫秒）
+    public string Message { get; set; }
+}
+```
+
+### 24.2 机器人配置 API
+
+#### 24.2.1 创建机器人
+
+```http
+POST /api/robots
+```
+
+**Request**:
+```json
+{
+    "name": "测试群机器人",
+    "webhookUrl": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx",
+    "groupName": "需求跟踪群"
+}
+```
+
+**Response**:
+```json
+{
+    "success": true,
+    "data": {
+        "id": 1,
+        "name": "测试群机器人",
+        "webhookUrl": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx",
+        "groupName": "需求跟踪群",
+        "isEnabled": true,
+        "requirementCount": 0,
+        "createdAt": "2025-01-01T00:00:00Z",
+        "updatedAt": "2025-01-01T00:00:00Z"
+    }
+}
+```
+
+**错误响应**:
+```json
+{
+    "success": false,
+    "message": "请填写机器人名称",
+    "errorCode": "VALIDATION_ERROR"
+}
+```
+
+#### 24.2.2 测试机器人连接
+
+```http
+POST /api/robots/{id}/test
+```
+
+**Response**:
+```json
+{
+    "success": true,
+    "data": {
+        "connected": true,
+        "responseTime": 150,
+        "message": "连接测试成功"
+    }
+}
+```
+
+**失败响应**:
+```json
+{
+    "success": false,
+    "message": "Webhook地址无效，请检查",
+    "errorCode": "VALIDATION_ERROR"
+}
+```
+
+#### 24.2.3 获取机器人列表
+
+```http
+GET /api/robots
+```
+
+**Query Parameters**:
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| pageIndex | int | 否 | 页码（默认1） |
+| pageSize | int | 否 | 每页条数（默认20） |
+| isEnabled | bool | 否 | 启用状态筛选 |
+| keyword | string | 否 | 搜索关键字（名称） |
+
+#### 24.2.4 获取机器人详情
+
+```http
+GET /api/robots/{id}
+```
+
+#### 24.2.5 更新机器人
+
+```http
+PUT /api/robots/{id}
+```
+
+**Request**:
+```json
+{
+    "name": "机器人A-修改",
+    "webhookUrl": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=yyy",
+    "groupName": "新群组",
+    "isEnabled": true
+}
+```
+
+#### 24.2.6 删除机器人
+
+```http
+DELETE /api/robots/{id}
+```
+
+**特殊处理**:
+- 删除机器人后，自动清除关联需求的 `RobotId` 字段
+- 记录审计日志
+
+### 24.3 机器人服务实现
+
+```csharp
+public class RobotService : IRobotService
+{
+    private readonly IRobotRepository _robotRepository;
+    private readonly IRequirementRepository _requirementRepository;
+    private readonly IHttpClientFactory _httpClientFactory;
+    
+    public async Task<Result<RobotDetailDto>> CreateAsync(CreateRobotDto dto)
+    {
+        // 1. 参数校验
+        if (string.IsNullOrWhiteSpace(dto.Name))
+            return Result.Fail("请填写机器人名称");
+            
+        if (dto.Name.Length > 50)
+            return Result.Fail("机器人名称最多50字");
+            
+        // 2. Webhook URL 格式校验
+        if (string.IsNullOrWhiteSpace(dto.WebhookUrl))
+            return Result.Fail("请填写Webhook地址");
+            
+        if (!Uri.TryCreate(dto.WebhookUrl, UriKind.Absolute, out var uri))
+            return Result.Fail("请输入有效的Webhook地址");
+            
+        if (uri.Scheme != "https")
+            return Result.Fail("Webhook地址必须为HTTPS");
+            
+        // 3. 机器人名称唯一性校验
+        if (await _robotRepository.ExistsByNameAsync(dto.Name))
+            return Result.Fail("机器人名称已存在");
+            
+        // 4. 创建机器人
+        var robot = new Robot
+        {
+            Name = dto.Name,
+            WebhookUrl = dto.WebhookUrl,
+            GroupName = dto.GroupName,
+            IsEnabled = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow
+        };
+        
+        await _robotRepository.AddAsync(robot);
+        
+        return Result.Success(MapToDetailDto(robot));
+    }
+    
+    public async Task<Result<RobotTestResultDto>> TestConnectionAsync(int id)
+    {
+        var robot = await _robotRepository.GetByIdAsync(id);
+        if (robot == null)
+            return Result.NotFound("机器人不存在");
+            
+        var stopwatch = Stopwatch.StartNew();
+        
+        try
+        {
+            var client = _httpClientFactory.CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(10);
+            
+            // 发送测试消息
+            var payload = new
+            {
+                msgtype = "text",
+                text = new { content = "🔔 需求跟踪管理系统 - 机器人连接测试" }
+            };
+            
+            var response = await client.PostAsJsonAsync(robot.WebhookUrl, payload);
+            stopwatch.Stop();
+            
+            if (response.IsSuccessStatusCode)
+            {
+                return Result.Success(new RobotTestResultDto
+                {
+                    Connected = true,
+                    ResponseTime = (int)stopwatch.ElapsedMilliseconds,
+                    Message = "连接测试成功"
+                });
+            }
+            else
+            {
+                return Result.Success(new RobotTestResultDto
+                {
+                    Connected = false,
+                    ResponseTime = (int)stopwatch.ElapsedMilliseconds,
+                    Message = $"连接失败，HTTP状态码：{response.StatusCode}"
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            stopwatch.Stop();
+            return Result.Success(new RobotTestResultDto
+            {
+                Connected = false,
+                ResponseTime = (int)stopwatch.ElapsedMilliseconds,
+                Message = $"Webhook地址无效，请检查：{ex.Message}"
+            });
+        }
+    }
+    
+    public async Task<Result> DeleteAsync(int id)
+    {
+        var robot = await _robotRepository.GetByIdAsync(id);
+        if (robot == null)
+            return Result.NotFound("机器人不存在");
+            
+        // 清除关联需求的 RobotId
+        await _requirementRepository.ClearRobotIdAsync(id);
+        
+        // 记录审计日志
+        await _auditLogService.LogAsync(AuditAction.DeleteRobot, id, robot.Name);
+        
+        // 删除机器人
+        await _robotRepository.DeleteAsync(robot);
+        
+        return Result.Success();
+    }
+}
+```
+
+### 24.4 机器人权限控制
+
+```csharp
+public class RobotAuthorizationHandler : AuthorizationHandler<OperationRequirement, Robot>
+{
+    protected override Task HandleRequirementAsync(
+        AuthorizationHandlerContext context,
+        OperationRequirement requirement,
+        Robot resource)
+    {
+        var user = _currentUser.GetCurrentUser();
+        
+        // 机器人配置仅管理员可用
+        if (user.Role != UserRole.Admin)
+        {
+            context.Fail();
+            return Task.CompletedTask;
+        }
+        
+        context.Succeed(requirement);
+        return Task.CompletedTask;
+    }
+}
+```
+
+---
+
+## 25. 用户管理模块完整实现计划
+
+> 对应测试用例：TC-USER-001 ~ TC-USER-009
+
+### 25.1 用户管理 API
+
+#### 25.1.1 创建用户（管理员）
+
+```http
+POST /api/users
+```
+
+**Request**:
+```json
+{
+    "username": "zhangsan",
+    "realName": "张三",
+    "role": 1,
+    "phone": "13800138000",
+    "email": "zhangsan@example.com"
+}
+```
+
+**Response（成功）**:
+```json
+{
+    "success": true,
+    "data": {
+        "id": 1,
+        "username": "zhangsan",
+        "realName": "张三",
+        "role": 1,
+        "phone": "13800138000",
+        "email": "zhangsan@example.com",
+        "accountStatus": 0,
+        "isEnabled": true,
+        "createdAt": "2025-01-01T00:00:00Z"
+    },
+    "message": "用户创建成功",
+    "initialPassword": "User@123456"
+}
+```
+
+**错误响应**:
+```json
+{
+    "success": false,
+    "message": "用户名已存在",
+    "errorCode": "DUPLICATE_USERNAME"
+}
+```
+
+#### 25.1.2 获取用户列表
+
+```http
+GET /api/users
+```
+
+**Query Parameters**:
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| pageIndex | int | 否 | 页码（默认1） |
+| pageSize | int | 否 | 每页条数（默认20） |
+| role | int | 否 | 角色筛选 |
+| isEnabled | bool | 否 | 启用状态筛选 |
+| keyword | string | 否 | 搜索关键字（用户名/姓名） |
+
+#### 25.1.3 获取用户详情
+
+```http
+GET /api/users/{id}
+```
+
+#### 25.1.4 更新用户
+
+```http
+PUT /api/users/{id}
+```
+
+**Request**:
+```json
+{
+    "realName": "张三-修改",
+    "role": 0,
+    "phone": "13900139000",
+    "email": "zhangsan_modified@example.com",
+    "isEnabled": true
+}
+```
+
+#### 25.1.5 删除用户
+
+```http
+DELETE /api/users/{id}
+```
+
+**失败响应（有关联需求）**:
+```json
+{
+    "success": false,
+    "message": "该用户是 3 条需求的跟进人，无法删除。请先变更这些需求的跟进人后再删除用户",
+    "errorCode": "HAS_RELATED_ENTITIES"
+}
+```
+
+### 25.2 用户服务实现
+
+```csharp
+public class UserService : IUserService
+{
+    private readonly IUserRepository _userRepository;
+    private readonly IRequirementRepository _requirementRepository;
+    private readonly IPasswordHasher _passwordHasher;
+    private readonly IEmailService _emailService;
+    
+    public async Task<Result<CreateUserResponse>> CreateAsync(CreateUserDto dto)
+    {
+        // 1. 参数校验
+        if (string.IsNullOrWhiteSpace(dto.Username))
+            return Result.Fail("请填写用户名");
+            
+        if (dto.Username.Length < 4)
+            return Result.Fail("用户名至少4位");
+            
+        if (dto.Username.Length > 50)
+            return Result.Fail("用户名最多50字");
+            
+        if (!Regex.IsMatch(dto.Username, @"^[a-zA-Z0-9_]+$"))
+            return Result.Fail("用户名只能包含字母、数字和下划线");
+            
+        if (string.IsNullOrWhiteSpace(dto.RealName))
+            return Result.Fail("请填写姓名");
+            
+        if (string.IsNullOrWhiteSpace(dto.Phone))
+            return Result.Fail("请填写手机号");
+            
+        if (!Regex.IsMatch(dto.Phone, @"^1[3-9]\d{9}$"))
+            return Result.Fail("请输入有效的手机号");
+            
+        if (!string.IsNullOrWhiteSpace(dto.Email) && !IsValidEmail(dto.Email))
+            return Result.Fail("请输入有效的邮箱地址");
+            
+        // 2. 唯一性校验
+        if (await _userRepository.ExistsByUsernameAsync(dto.Username))
+            return Result.Fail("用户名已存在");
+            
+        if (await _userRepository.ExistsByPhoneAsync(dto.Phone))
+            return Result.Fail("该手机号已注册");
+            
+        if (!string.IsNullOrWhiteSpace(dto.Email))
+        {
+            if (await _userRepository.ExistsByEmailAsync(dto.Email))
+                return Result.Fail("该邮箱已被注册");
+        }
+        
+        // 3. 生成初始密码
+        var initialPassword = PasswordPolicy.GenerateInitialPassword();
+        
+        // 4. 创建用户
+        var user = new User
+        {
+            Username = dto.Username,
+            RealName = dto.RealName,
+            Role = dto.Role,
+            Phone = dto.Phone,
+            Email = dto.Email,
+            PasswordHash = _passwordHasher.Hash(initialPassword),
+            AccountStatus = AccountStatus.PendingActivation,
+            IsFirstLogin = true,
+            FailedLoginCount = 0,
+            IsEnabled = true,
+            CreatedAt = DateTime.UtcNow
+        };
+        
+        await _userRepository.AddAsync(user);
+        
+        // 5. 记录审计日志
+        await _auditLogService.LogAsync(AuditAction.CreateUser, user.Id, user.Username);
+        
+        return Result.Success(new CreateUserResponse
+        {
+            User = MapToDto(user),
+            InitialPassword = initialPassword
+        });
+    }
+    
+    public async Task<Result> DeleteAsync(int id)
+    {
+        var user = await _userRepository.GetByIdAsync(id);
+        if (user == null)
+            return Result.NotFound("用户不存在");
+            
+        // 1. 检查是否为默认管理员
+        if (user.IsDefaultAdmin)
+            return Result.Fail("默认管理员账号不可删除");
+            
+        // 2. 检查是否有关联需求
+        var requirementCount = await _requirementRepository.CountByFollowerIdAsync(id);
+        if (requirementCount > 0)
+            return Result.Fail($"该用户是 {requirementCount} 条需求的跟进人，无法删除。请先变更这些需求的跟进人后再删除用户");
+            
+        // 3. 检查是否为其他用户的跟进人
+        var managedProjects = await _projectRepository.GetByManagerIdAsync(id);
+        if (managedProjects.Any())
+            return Result.Fail($"该用户是 {managedProjects.Count} 个项目的负责人，请先变更项目负责人");
+            
+        // 4. 删除用户
+        await _userRepository.DeleteAsync(user);
+        
+        // 5. 记录审计日志
+        await _auditLogService.LogAsync(AuditAction.DeleteUser, id, user.Username);
+        
+        return Result.Success();
+    }
+    
+    public async Task<Result<UserDto>> UpdateAsync(int id, UpdateUserDto dto)
+    {
+        var user = await _userRepository.GetByIdAsync(id);
+        if (user == null)
+            return Result.NotFound("用户不存在");
+            
+        // 1. 检查是否为默认管理员
+        if (user.IsDefaultAdmin && dto.Role != UserRole.Admin)
+            return Result.Fail("默认管理员角色不可变更");
+            
+        // 2. 手机号唯一性校验
+        if (!string.IsNullOrWhiteSpace(dto.Phone) && dto.Phone != user.Phone)
+        {
+            if (await _userRepository.ExistsByPhoneAsync(dto.Phone, id))
+                return Result.Fail("该手机号已注册");
+            user.Phone = dto.Phone;
+        }
+        
+        // 3. 邮箱唯一性校验
+        if (!string.IsNullOrWhiteSpace(dto.Email) && dto.Email != user.Email)
+        {
+            if (await _userRepository.ExistsByEmailAsync(dto.Email, id))
+                return Result.Fail("该邮箱已被注册");
+            user.Email = dto.Email;
+        }
+        
+        // 4. 更新字段
+        user.RealName = dto.RealName ?? user.RealName;
+        user.Role = dto.Role;
+        user.IsEnabled = dto.IsEnabled;
+        user.UpdatedAt = DateTime.UtcNow;
+        
+        await _userRepository.UpdateAsync(user);
+        
+        // 5. 记录审计日志
+        await _auditLogService.LogAsync(AuditAction.UpdateUser, user.Id, user.Username);
+        
+        return Result.Success(MapToDto(user));
+    }
+    
+    public async Task<Result<UserListDto>> GetFollowerOptionsAsync()
+    {
+        // 跟进人下拉列表：仅显示启用用户
+        var users = await _userRepository.GetEnabledUsersAsync();
+        
+        return Result.Success(new UserListDto
+        {
+            Items = users.Select(u => new UserOptionDto
+            {
+                Id = u.Id,
+                RealName = u.RealName
+            }).ToList()
+        });
+    }
+}
+```
+
+### 25.3 用户权限控制
+
+```csharp
+public class UserAuthorizationHandler : AuthorizationHandler<OperationRequirement, User>
+{
+    protected override Task HandleRequirementAsync(
+        AuthorizationHandlerContext context,
+        OperationRequirement requirement,
+        User resource)
+    {
+        var currentUser = _currentUser.GetCurrentUser();
+        
+        switch (requirement.Operation)
+        {
+            case Operation.Read:
+                // 所有用户可查看自己的详情
+                if (currentUser.Id == resource.Id)
+                {
+                    context.Succeed(requirement);
+                    return Task.CompletedTask;
+                }
+                // 非管理员只能查看用户列表
+                if (currentUser.Role != UserRole.Admin)
+                {
+                    context.Fail();
+                    return Task.CompletedTask;
+                }
+                break;
+                
+            case Operation.Create:
+            case Operation.Update:
+            case Operation.Delete:
+            case Operation.Disable:
+            case Operation.Enable:
+                // 仅管理员可用
+                if (currentUser.Role != UserRole.Admin)
+                {
+                    context.Fail();
+                    return Task.CompletedTask;
+                }
+                
+                // 默认管理员保护
+                if (resource.IsDefaultAdmin)
+                {
+                    if (requirement.Operation == Operation.Delete)
+                        return Task.CompletedTask; // 已处理
+                    if (requirement.Operation == Operation.Disable)
+                        return Task.CompletedTask; // 已处理
+                }
+                break;
+        }
+        
+        context.Succeed(requirement);
+        return Task.CompletedTask;
+    }
+}
+```
+
+---
+
+## 26. 通知系统完整实现计划
+
+> 对应测试用例：TC-NOTIFY-001 ~ TC-NOTIFY-019
+
+### 26.1 通知实体定义
+
+```csharp
+public class NotificationLog
+{
+    public int Id { get; set; }
+    public int RequirementId { get; set; }
+    public Requirement Requirement { get; set; }
+    public NotificationType Type { get; set; }          // 通知类型
+    public int? RobotId { get; set; }                   // 通知机器人
+    public Robot? Robot { get; set; }
+    public NotificationStatus Status { get; set; }       // 发送状态
+    public int RetryCount { get; set; }                 // 重试次数
+    public DateTime? LastAttemptAt { get; set; }        // 最后尝试时间
+    public DateTime? SentAt { get; set; }                // 发送成功时间
+    public string? ErrorMessage { get; set; }           // 错误信息
+    public bool IsCompensation { get; set; }            // 是否为补偿发送
+    public DateTime CreatedAt { get; set; }
+}
+
+public enum NotificationType
+{
+    StatusChange = 0,      // 状态变更通知
+    DailyReminder = 1,     // 每日提醒
+    DelayWarning = 2       // 延期预警
+}
+
+public enum NotificationStatus
+{
+    Pending = 0,           // 待发送
+    Sent = 1,              // 已发送
+    Failed = 2,             // 发送失败
+    Retrying = 3           // 重试中
+}
+
+public class NotificationListDto
+{
+    public int Id { get; set; }
+    public string RequirementName { get; set; }
+    public string RequirementNo { get; set; }
+    public NotificationType Type { get; set; }
+    public string TypeName { get; set; }
+    public string? RobotName { get; set; }
+    public NotificationStatus Status { get; set; }
+    public string StatusName { get; set; }
+    public int RetryCount { get; set; }
+    public DateTime? SentAt { get; set; }
+    public string? ErrorMessage { get; set; }
+    public DateTime CreatedAt { get; set; }
+}
+
+public class NotificationStatsDto
+{
+    public int TotalSent { get; set; }
+    public int SuccessCount { get; set; }
+    public int FailedCount { get; set; }
+    public double SuccessRate { get; set; }
+    public double AverageDelaySeconds { get; set; }
+    public Dictionary<string, NotificationTypeStats> ByType { get; set; }
+}
+
+public class NotificationTypeStats
+{
+    public int Total { get; set; }
+    public int Success { get; set; }
+    public int Failed { get; set; }
+}
+```
+
+### 26.2 通知 API
+
+#### 26.2.1 获取通知日志列表
+
+```http
+GET /api/notifications
+```
+
+**Query Parameters**:
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| pageIndex | int | 否 | 页码（默认1） |
+| pageSize | int | 否 | 每页条数（默认20） |
+| requirementId | int | 否 | 需求ID |
+| type | int | 否 | 通知类型（0/1/2） |
+| status | int | 否 | 发送状态（0/1/2/3） |
+| startTime | date | 否 | 开始时间 |
+| endTime | date | 否 | 结束时间 |
+
+**Response**:
+```json
+{
+    "success": true,
+    "data": {
+        "items": [
+            {
+                "id": 1,
+                "requirementName": "需求A",
+                "requirementNo": "REQ-001",
+                "type": 0,
+                "typeName": "状态变更",
+                "robotName": "测试群机器人",
+                "status": 1,
+                "statusName": "已发送",
+                "retryCount": 0,
+                "sentAt": "2025-01-01T10:05:00Z",
+                "errorMessage": null,
+                "createdAt": "2025-01-01T10:00:00Z"
+            }
+        ],
+        "totalCount": 100,
+        "pageIndex": 1,
+        "pageSize": 20
+    }
+}
+```
+
+#### 26.2.2 获取通知详情
+
+```http
+GET /api/notifications/{id}
+```
+
+#### 26.2.3 手动重试
+
+```http
+POST /api/notifications/{id}/retry
+```
+
+**Response**:
+```json
+{
+    "success": true,
+    "data": {
+        "id": 1,
+        "status": 1,
+        "sentAt": "2025-01-01T10:30:00Z"
+    }
+}
+```
+
+#### 26.2.4 获取通知统计
+
+```http
+GET /api/notifications/stats
+```
+
+**Query Parameters**:
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| startTime | date | 否 | 统计开始时间 |
+| endTime | date | 否 | 统计结束时间 |
+
+**Response**:
+```json
+{
+    "success": true,
+    "data": {
+        "totalSent": 1000,
+        "successCount": 980,
+        "failedCount": 20,
+        "successRate": 98.0,
+        "averageDelaySeconds": 5.2,
+        "byType": {
+            "StatusChange": { "total": 800, "success": 790, "failed": 10 },
+            "DailyReminder": { "total": 150, "success": 150, "failed": 0 },
+            "DelayWarning": { "total": 50, "success": 40, "failed": 10 }
+        }
+    }
+}
+```
+
+### 26.3 通知服务实现
+
+```csharp
+public class NotificationService : INotificationService
+{
+    private readonly INotificationRepository _notificationRepository;
+    private readonly IRobotRepository _robotRepository;
+    private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ILogger<NotificationService> _logger;
+    
+    private const int MaxRetryCount = 3;
+    private static readonly int[] RetryIntervalsSeconds = { 30, 120, 300 }; // 30s, 2min, 5min
+    
+    public async Task<Result> SendStatusChangeNotificationAsync(Requirement requirement, RequirementStatus oldStatus)
+    {
+        // 1. 检查是否关联了机器人
+        if (!requirement.RobotId.HasValue)
+            return Result.Success(); // 无需发送通知
+            
+        var robot = await _robotRepository.GetByIdAsync(requirement.RobotId.Value);
+        if (robot == null || !robot.IsEnabled)
+            return Result.Success(); // 机器人不存在或已禁用
+            
+        // 2. 构造通知内容
+        var content = BuildStatusChangeContent(requirement, oldStatus);
+        
+        // 3. 发送通知
+        var result = await SendAsync(robot, content);
+        
+        // 4. 记录日志
+        var log = new NotificationLog
+        {
+            RequirementId = requirement.Id,
+            RobotId = robot.Id,
+            Type = NotificationType.StatusChange,
+            Status = result.IsSuccess ? NotificationStatus.Sent : NotificationStatus.Failed,
+            RetryCount = 0,
+            LastAttemptAt = DateTime.UtcNow,
+            SentAt = result.IsSuccess ? DateTime.UtcNow : null,
+            ErrorMessage = result.ErrorMessage,
+            CreatedAt = DateTime.UtcNow
+        };
+        
+        await _notificationRepository.AddAsync(log);
+        
+        // 5. 如果失败，启动重试
+        if (!result.IsSuccess)
+        {
+            await ScheduleRetryAsync(log);
+        }
+        
+        return Result.Success();
+    }
+    
+    public async Task<Result> SendReminderNotificationAsync(Requirement requirement, ReminderType type, int daysRemaining)
+    {
+        if (!requirement.RobotId.HasValue)
+            return Result.Success();
+            
+        var robot = await _robotRepository.GetByIdAsync(requirement.RobotId.Value);
+        if (robot == null || !robot.IsEnabled)
+            return Result.Success();
+            
+        var content = BuildReminderContent(requirement, type, daysRemaining);
+        var result = await SendAsync(robot, content);
+        
+        var log = new NotificationLog
+        {
+            RequirementId = requirement.Id,
+            RobotId = robot.Id,
+            Type = NotificationType.DailyReminder,
+            Status = result.IsSuccess ? NotificationStatus.Sent : NotificationStatus.Failed,
+            RetryCount = 0,
+            LastAttemptAt = DateTime.UtcNow,
+            SentAt = result.IsSuccess ? DateTime.UtcNow : null,
+            ErrorMessage = result.ErrorMessage,
+            CreatedAt = DateTime.UtcNow
+        };
+        
+        await _notificationRepository.AddAsync(log);
+        
+        if (!result.IsSuccess)
+        {
+            await ScheduleRetryAsync(log);
+        }
+        
+        return Result.Success();
+    }
+    
+    private async Task<SendResult> SendAsync(Robot robot, NotificationContent content)
+    {
+        try
+        {
+            var client = _httpClientFactory.CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(10);
+            
+            var payload = new
+            {
+                msgtype = "markdown",
+                markdown = new
+                {
+                    content = content.MarkdownContent
+                }
+            };
+            
+            var response = await client.PostAsJsonAsync(robot.WebhookUrl, payload);
+            
+            if (response.IsSuccessStatusCode)
+            {
+                return SendResult.Success();
+            }
+            else
+            {
+                var errorContent = await response.Content.ReadAsStringAsync();
+                return SendResult.Fail($"HTTP {response.StatusCode}: {errorContent}");
+            }
+        }
+        catch (Exception ex)
+        {
+            return SendResult.Fail(ex.Message);
+        }
+    }
+    
+    private NotificationContent BuildStatusChangeContent(Requirement requirement, RequirementStatus oldStatus)
+    {
+        var newStatusName = GetStatusName(requirement.Status);
+        var oldStatusName = GetStatusName(oldStatus);
+        
+        var markdown = $@">## 需求状态变更通知
+
+**需求名称**: {requirement.Name}
+**需求编号**: {requirement.RequirementNo}
+
+### 状态变更
+- **原状态**: {oldStatusName}
+- **新状态**: {newStatusName}
+
+### 基本信息
+- **跟进人**: {requirement.Follower?.RealName ?? "-"}
+- **优先级**: {GetPriorityName(requirement.Priority)}
+
+### 计划时间
+- **计划开始**: {requirement.PlanStartDate?.ToString("yyyy-MM-dd") ?? "-"}
+- **计划交测**: {requirement.PlanTestDate?.ToString("yyyy-MM-dd") ?? "-"}
+- **计划上线**: {requirement.PlanLaunchDate?.ToString("yyyy-MM-dd") ?? "-"}
+
+> 🔔 变更时间: {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}";
+
+        return new NotificationContent { MarkdownContent = markdown };
+    }
+    
+    private NotificationContent BuildReminderContent(Requirement requirement, ReminderType type, int daysRemaining)
+    {
+        var typeName = type == ReminderType.Test ? "交测" : "上线";
+        var planDate = type == ReminderType.Test ? requirement.PlanTestDate : requirement.PlanLaunchDate;
+        var daysText = daysRemaining switch
+        {
+            > 0 => $"{daysRemaining}天",
+            0 => "当天",
+            _ => "已过期"
+        };
+        
+        var markdown = $@"> ## ⏰ 需求时间提醒
+
+**需求名称**: {requirement.Name}
+**需求编号**: {requirement.RequirementNo}
+
+### 提醒信息
+- **到期类型**: {typeName}
+- **计划时间**: {planDate?.ToString("yyyy-MM-dd") ?? "-"}
+- **剩余时间**: {daysText}
+
+### 基本信息
+- **跟进人**: {requirement.Follower?.RealName ?? "-"}
+- **当前状态**: {GetStatusName(requirement.Status)}
+
+> 🔔 系统自动发送，请及时处理";
+
+        return new NotificationContent { MarkdownContent = markdown };
+    }
+    
+    private async Task ScheduleRetryAsync(NotificationLog log)
+    {
+        log.Status = NotificationStatus.Retrying;
+        await _notificationRepository.UpdateAsync(log);
+        
+        // 重试逻辑由 NotificationRetryService 后台服务处理
+    }
+}
+
+public class SendResult
+{
+    public bool IsSuccess { get; set; }
+    public string? ErrorMessage { get; set; }
+    
+    public static SendResult Success() => new() { IsSuccess = true };
+    public static SendResult Fail(string message) => new() { IsSuccess = false, ErrorMessage = message };
+}
+
+public class NotificationContent
+{
+    public string MarkdownContent { get; set; }
+}
+```
+
+### 26.4 通知重试服务
+
+```csharp
+public class NotificationRetryService : BackgroundService
+{
+    private readonly IServiceProvider _serviceProvider;
+    private readonly ILogger<NotificationRetryService> _logger;
+    
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                await ProcessFailedNotificationsAsync(stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "通知重试处理异常");
+            }
+            
+            await Task.Delay(TimeSpan.FromSeconds(10), stoppingToken);
+        }
+    }
+    
+    private async Task ProcessFailedNotificationsAsync(CancellationToken stoppingToken)
+    {
+        using var scope = _serviceProvider.CreateScope();
+        var notificationRepo = scope.ServiceProvider.GetRequiredService<INotificationRepository>();
+        var robotRepo = scope.ServiceProvider.GetRequiredService<IRobotRepository>();
+        var httpClientFactory = scope.ServiceProvider.GetRequiredService<IHttpClientFactory>();
+        var notificationService = scope.ServiceProvider.GetRequiredService<INotificationService>();
+        
+        var failedLogs = await notificationRepo.GetFailedPendingRetryAsync();
+        
+        foreach (var log in failedLogs)
+        {
+            if (stoppingToken.IsCancellationRequested) break;
+            
+            if (log.RetryCount >= MaxRetryCount)
+            {
+                log.Status = NotificationStatus.Failed;
+                await notificationRepo.UpdateAsync(log);
+                continue;
+            }
+            
+            var delay = RetryIntervalsSeconds[log.RetryCount];
+            var elapsed = DateTime.UtcNow - log.LastAttemptAt;
+            
+            if (elapsed.TotalSeconds >= delay)
+            {
+                await RetrySendNotificationAsync(log, robotRepo, httpClientFactory, notificationRepo);
+            }
+        }
+    }
+    
+    private async Task RetrySendNotificationAsync(
+        NotificationLog log,
+        IRobotRepository robotRepo,
+        IHttpClientFactory httpClientFactory,
+        INotificationRepository notificationRepo)
+    {
+        log.RetryCount++;
+        log.LastAttemptAt = DateTime.UtcNow;
+        
+        var robot = await robotRepo.GetByIdAsync(log.RobotId);
+        if (robot == null || !robot.IsEnabled)
+        {
+            log.Status = NotificationStatus.Failed;
+            log.ErrorMessage = "机器人已被删除或禁用";
+            await notificationRepo.UpdateAsync(log);
+            return;
+        }
+        
+        var requirement = await GetRequirementAsync(log.RequirementId);
+        var content = BuildRetryContent(requirement, log.Type);
+        var result = await SendAsync(robot, content, httpClientFactory);
+        
+        if (result.IsSuccess)
+        {
+            log.Status = NotificationStatus.Sent;
+            log.SentAt = DateTime.UtcNow;
+            log.ErrorMessage = null;
+            _logger.LogInformation("通知重试成功: LogId={LogId}", log.Id);
+        }
+        else
+        {
+            log.ErrorMessage = result.ErrorMessage;
+            if (log.RetryCount >= MaxRetryCount)
+            {
+                log.Status = NotificationStatus.Failed;
+                _logger.LogWarning("通知重试失败，已达最大次数: LogId={LogId}, RetryCount={RetryCount}", log.Id, log.RetryCount);
+            }
+        }
+        
+        await notificationRepo.UpdateAsync(log);
+    }
+}
+```
+
+### 26.5 每日补偿扫描服务
+
+```csharp
+public class NotificationCompensationService : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                var now = DateTime.UtcNow;
+                var next9AM = GetNext9AM(now);
+                
+                var delay = next9AM - now;
+                if (delay > TimeSpan.Zero)
+                {
+                    _logger.LogInformation("补偿扫描服务将在 {Time} 执行", next9AM);
+                    await Task.Delay(delay, stoppingToken);
+                }
+                
+                await ScanAndCompensateAsync(stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "补偿扫描服务执行异常");
+                await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+            }
+        }
+    }
+    
+    private async Task ScanAndCompensateAsync(CancellationToken stoppingToken)
+    {
+        _logger.LogInformation("开始执行每日补偿扫描");
+        
+        using var scope = _serviceProvider.CreateScope();
+        var notificationRepo = scope.ServiceProvider.GetRequiredService<INotificationRepository>();
+        var notificationService = scope.ServiceProvider.GetRequiredService<INotificationService>();
+        
+        // 扫描过去24小时内失败的、不再重试的通知
+        var failedNotifications = await notificationRepo.GetFailedForCompensationAsync(TimeSpan.FromHours(24));
+        
+        var compensatedCount = 0;
+        foreach (var notification in failedNotifications)
+        {
+            if (stoppingToken.IsCancellationRequested) break;
+            
+            if (notification.RetryCount >= MaxRetryCount)
+            {
+                var result = await notificationService.ResendNotificationAsync(notification);
+                
+                notification.IsCompensation = true;
+                notification.RetryCount = 0; // 重置重试计数
+                notification.LastAttemptAt = DateTime.UtcNow;
+                notification.Status = result.IsSuccess ? NotificationStatus.Sent : NotificationStatus.Failed;
+                notification.SentAt = result.IsSuccess ? DateTime.UtcNow : null;
+                notification.ErrorMessage = result.ErrorMessage;
+                
+                await notificationRepo.UpdateAsync(notification);
+                
+                if (result.IsSuccess)
+                    compensatedCount++;
+            }
+        }
+        
+        _logger.LogInformation("补偿扫描完成: 共处理 {Total} 条，成功 {Success} 条", failedNotifications.Count, compensatedCount);
+    }
+    
+    private DateTime GetNext9AM(DateTime now)
+    {
+        var today9AM = new DateTime(now.Year, now.Month, now.Day, 9, 0, 0, DateTimeKind.Utc);
+        return now >= today9AM ? today9AM.AddDays(1) : today9AM;
+    }
+}
+```
+
+---
+
+## 27. 非功能需求完整实现计划
+
+> 对应测试用例：TC-NFR-001 ~ TC-NFR-013
+
+### 27.1 性能优化实现
+
+#### 27.1.1 数据库索引策略
+
+```csharp
+public class DatabaseIndexConfiguration
+{
+    public static void Configure(ModelBuilder modelBuilder)
+    {
+        // Requirement 表索引
+        modelBuilder.Entity<Requirement>(entity =>
+        {
+            // 复合索引：状态 + 计划交测时间（用于每日提醒扫描）
+            entity.HasIndex(e => new { e.Status, e.PlanTestDate })
+                .HasDatabaseName("IX_Requirement_Status_PlanTestDate");
+                
+            // 复合索引：状态 + 计划上线时间（用于上线提醒扫描）
+            entity.HasIndex(e => new { e.Status, e.PlanLaunchDate })
+                .HasDatabaseName("IX_Requirement_Status_PlanLaunchDate");
+                
+            // 索引：跟进人（用于按跟进人筛选）
+            entity.HasIndex(e => e.FollowerId)
+                .HasDatabaseName("IX_Requirement_FollowerId");
+                
+            // 索引：项目（用于按项目筛选）
+            entity.HasIndex(e => e.ProjectId)
+                .HasDatabaseName("IX_Requirement_ProjectId");
+                
+            // 索引：需求号（唯一）
+            entity.HasIndex(e => e.RequirementNo)
+                .IsUnique()
+                .HasDatabaseName("IX_Requirement_RequirementNo");
+                
+            // 索引：创建时间（用于排序）
+            entity.HasIndex(e => e.CreatedAt)
+                .HasDatabaseName("IX_Requirement_CreatedAt");
+        });
+        
+        // Project 表索引
+        modelBuilder.Entity<Project>(entity =>
+        {
+            // 索引：项目编码（唯一）
+            entity.HasIndex(e => e.Code)
+                .IsUnique()
+                .HasDatabaseName("IX_Project_Code");
+        });
+        
+        // User 表索引
+        modelBuilder.Entity<User>(entity =>
+        {
+            // 索引：用户名（唯一）
+            entity.HasIndex(e => e.Username)
+                .IsUnique()
+                .HasDatabaseName("IX_User_username");
+                
+            // 索引：手机号（唯一）
+            entity.HasIndex(e => e.Phone)
+                .IsUnique()
+                .HasDatabaseName("IX_User_phone");
+        });
+        
+        // NotificationLog 表索引
+        modelBuilder.Entity<NotificationLog>(entity =>
+        {
+            // 复合索引：状态 + 最后尝试时间（用于重试扫描）
+            entity.HasIndex(e => new { e.Status, e.LastAttemptAt })
+                .HasDatabaseName("IX_NotificationLog_Status_LastAttemptAt");
+                
+            // 索引：创建时间（用于日志查询）
+            entity.HasIndex(e => e.CreatedAt)
+                .HasDatabaseName("IX_NotificationLog_CreatedAt");
+        });
+    }
+}
+```
+
+#### 27.1.2 异步查询优化
+
+```csharp
+public class RequirementQueryHandler
+{
+    private readonly RequirementDbContext _context;
+    
+    public async Task<PagedResult<RequirementListDto>> Handle(RequirementQuery query)
+    {
+        var queryable = _context.Requirements
+            .AsNoTracking()
+            .Include(r => r.Follower)
+            .Include(r => r.Project)
+            .AsQueryable();
+        
+        // 动态筛选
+        queryable = ApplyFilters(queryable, query);
+        
+        // 获取总数
+        var totalCount = await queryable.CountAsync();
+        
+        // 排序
+        queryable = ApplySorting(queryable, query);
+        
+        // 分页
+        var items = await queryable
+            .Skip((query.PageIndex - 1) * query.PageSize)
+            .Take(query.PageSize)
+            .Select(r => new RequirementListDto
+            {
+                Id = r.Id,
+                Name = r.Name,
+                RequirementNo = r.RequirementNo,
+                Status = r.Status,
+                StatusName = GetStatusName(r.Status),
+                Progress = r.Progress,
+                FollowerName = r.Follower != null ? r.Follower.RealName : null,
+                PlanStartDate = r.PlanStartDate,
+                PlanTestDate = r.PlanTestDate,
+                PlanLaunchDate = r.PlanLaunchDate,
+                ActualTestDate = r.ActualTestDate,
+                ActualLaunchDate = r.ActualLaunchDate,
+                IsConfirmed = r.IsConfirmed,
+                ProjectName = r.Project != null ? r.Project.Name : null,
+                Priority = r.Priority,
+                CreatedAt = r.CreatedAt
+            })
+            .ToListAsync();
+        
+        return new PagedResult<RequirementListDto>
+        {
+            Items = items,
+            TotalCount = totalCount,
+            PageIndex = query.PageIndex,
+            PageSize = query.PageSize
+        };
+    }
+}
+```
+
+### 27.2 安全实现
+
+#### 27.2.1 JWT 认证配置
+
+```csharp
+public class JwtAuthenticationConfiguration
+{
+    public static void Configure(IServiceCollection services, JwtSettings jwtSettings)
+    {
+        services.AddAuthentication(options =>
+        {
+            options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+            options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+        })
+        .AddJwtBearer(options =>
+        {
+            options.TokenValidationParameters = new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidateAudience = true,
+                ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,
+                ValidIssuer = jwtSettings.Issuer,
+                ValidAudience = jwtSettings.Audience,
+                IssuerSigningKey = new SymmetricSecurityKey(
+                    Encoding.UTF8.GetBytes(jwtSettings.SecretKey)),
+                ClockSkew = TimeSpan.FromMinutes(5)
+            };
+            
+            options.Events = new JwtBearerEvents
+            {
+                OnAuthenticationFailed = context =>
+                {
+                    if (context.Exception is SecurityTokenExpiredException)
+                    {
+                        context.Response.Headers.Append("Token-Expired", "true");
+                    }
+                    return Task.CompletedTask;
+                }
+            };
+        });
+    }
+}
+```
+
+#### 27.2.2 密码加密（BCrypt）
+
+```csharp
+public class BcryptPasswordHasher : IPasswordHasher
+{
+    private const int WorkFactor = 12;  // BCrypt 工作因子
+    
+    public string Hash(string password)
+    {
+        return BCrypt.Net.BCrypt.HashPassword(password, WorkFactor);
+    }
+    
+    public bool Verify(string password, string hash)
+    {
+        return BCrypt.Net.BCrypt.Verify(password, hash);
+    }
+    
+    public int GetWorkFactor(string hash)
+    {
+        return BCrypt.Net.BCrypt.PasswordHashInformation(hash).WorkFactor;
+    }
+}
+```
+
+### 27.3 监控与告警
+
+```csharp
+public class HealthCheckConfiguration
+{
+    public static void Configure(IServiceCollection services)
+    {
+        services.AddHealthChecks()
+            .AddDbContextCheck<RequirementDbContext>("database")
+            .AddCheck("notification_queue", () =>
+            {
+                var queueLength = _notificationQueue.GetQueueLength();
+                return queueLength < 1000
+                    ? HealthCheckResult.Healthy($"Queue length: {queueLength}")
+                    : HealthCheckResult.Degraded($"Queue length: {queueLength}");
+            })
+            .AddUrlGroup(new Uri($"{_configuration["NotificationService:BaseUrl"]}/health"),
+                name: "notification_service",
+                timeout: TimeSpan.FromSeconds(5));
+    }
+}
+
+public class MonitoringService
+{
+    private readonly ILogger<MonitoringService> _logger;
+    private readonly MetricsCounter _notificationSuccessCounter;
+    private readonly MetricsCounter _notificationFailedCounter;
+    
+    public async Task CheckNotificationFailureRateAsync()
+    {
+        var stats = await _notificationRepository.GetDailyStatsAsync();
+        var failureRate = (double)stats.FailedCount / stats.TotalCount;
+        
+        if (failureRate > 0.05) // 失败率 > 5%
+        {
+            _logger.LogWarning(
+                "通知失败率过高: {FailureRate:P} (失败: {Failed}, 总数: {Total})",
+                failureRate,
+                stats.FailedCount,
+                stats.TotalCount);
+                
+            // 发送告警通知
+            await _alertService.SendAsync(new Alert
+            {
+                Level = AlertLevel.Warning,
+                Title = "通知失败率过高",
+                Message = $"通知失败率超过5%: {failureRate:P}"
+            });
+        }
+    }
+}
+```
+
+---
+
+## 28. 补充测试用例覆盖映射表
+
+### 28.1 项目管理模块（TC-PROJ-xxx）
+
+| 测试用例 | 后端实现位置 | 验证方式 |
+|----------|-------------|----------|
+| TC-PROJ-001 | ProjectService.Create | 集成测试 |
+| TC-PROJ-002 | ProjectService.Create（参数校验） | 单元测试 |
+| TC-PROJ-003 | ProjectService.Update | 集成测试 |
+| TC-PROJ-004 | ProjectService.Delete | 集成测试 |
+| TC-PROJ-005 | ProjectService.Delete（关联约束） | 集成测试 |
+| TC-PROJ-006 | 前端单选限制 | UI测试 |
+| TC-PROJ-007 | ProjectAuthorizationHandler | 单元测试 |
+| TC-PROJ-008 | ProjectService.Update（关联变更） | 集成测试 |
+| TC-PROJ-009 | ProjectsController.GetProjects | 集成测试 |
+| TC-PROJ-010 | ProjectsController.GetProjects（空列表） | 集成测试 |
+| TC-PROJ-011 | ProjectService.Create（编码唯一性） | 单元测试 |
+| TC-PROJ-012 | ProjectValidator.Code | 单元测试 |
+| TC-PROJ-013 | ProjectValidator.Code（超长） | 单元测试 |
+| TC-PROJ-014 | ProjectService.Create（负责人为空） | 集成测试 |
+| TC-PROJ-015 | ProjectService.Create（负责人有效） | 集成测试 |
+| TC-PROJ-016 | ProjectService.Delete（取消） | UI测试 |
+
+### 28.2 机器人配置模块（TC-BOT-xxx）
+
+| 测试用例 | 后端实现位置 | 验证方式 |
+|----------|-------------|----------|
+| TC-BOT-001 | RobotService.Create + TestConnection | 集成测试 |
+| TC-BOT-002 | RobotService.TestConnection（无效URL） | 单元测试 |
+| TC-BOT-003 | RobotValidator.Name | 单元测试 |
+| TC-BOT-004 | RobotService.Create（需先测试） | 集成测试 |
+| TC-BOT-005 | RobotService.Update（启用/禁用） | 集成测试 |
+| TC-BOT-006 | RobotAuthorizationHandler | 单元测试 |
+| TC-BOT-007 | NotificationService.Send | 集成测试 |
+| TC-BOT-008 | RobotService.Delete（级联清除） | 集成测试 |
+| TC-BOT-009 | RobotService.Update | 集成测试 |
+| TC-BOT-010 | RobotsController.GetRobots | 集成测试 |
+| TC-BOT-011 | RobotService.Delete（取消） | UI测试 |
+| TC-BOT-012 | RobotValidator.WebhookUrl | 单元测试 |
+| TC-BOT-013 | RobotValidator.WebhookUrl（HTTPS） | 单元测试 |
+| TC-BOT-014 | RobotService.Create（多需求关联） | 集成测试 |
+| TC-BOT-015 | 前端单选限制 | UI测试 |
+
+### 28.3 用户管理模块（TC-USER-xxx）
+
+| 测试用例 | 后端实现位置 | 验证方式 |
+|----------|-------------|----------|
+| TC-USER-001 | UserService.Create | 集成测试 |
+| TC-USER-002 | UserService.Update | 集成测试 |
+| TC-USER-003 | UserService.Delete | 集成测试 |
+| TC-USER-004 | UserService.Update（禁用） | 集成测试 |
+| TC-USER-005 | UserAuthorizationHandler | 单元测试 |
+| TC-USER-006 | UserService.GetFollowerOptions | 集成测试 |
+| TC-USER-007 | UserService.Delete（关联约束） | 集成测试 |
+| TC-USER-008 | UserService.Delete（无关联） | 集成测试 |
+| TC-USER-009 | RequirementRepository.GetById（禁用用户保留） | 集成测试 |
+
+### 28.4 通知系统模块（TC-NOTIFY-xxx）
+
+| 测试用例 | 后端实现位置 | 验证方式 |
+|----------|-------------|----------|
+| TC-NOTIFY-001 | NotificationService.SendStatusChange | 集成测试 |
+| TC-NOTIFY-002 | NotificationService.BuildStatusChangeContent | 单元测试 |
+| TC-NOTIFY-003 | 通知发送延迟测量 | 集成测试 |
+| TC-NOTIFY-004 | NotificationService.Send（无机器人） | 单元测试 |
+| TC-NOTIFY-005 | NotificationService.Send（机器人禁用） | 单元测试 |
+| TC-NOTIFY-006 | DailyReminderService（高优先级3天） | 单元测试 |
+| TC-NOTIFY-007 | DailyReminderService（高优先级1天） | 单元测试 |
+| TC-NOTIFY-008 | DailyReminderService（高优先级当天） | 单元测试 |
+| TC-NOTIFY-009 | DailyReminderService（中优先级） | 单元测试 |
+| TC-NOTIFY-010 | DailyReminderService（低优先级） | 单元测试 |
+| TC-NOTIFY-011 | DailyReminderService（无计划时间） | 单元测试 |
+| TC-NOTIFY-012 | DailyReminderService（已过期不重复） | 单元测试 |
+| TC-NOTIFY-013 | NotificationRepository.Add | 集成测试 |
+| TC-NOTIFY-014 | NotificationRepository.Add（失败记录） | 集成测试 |
+| TC-NOTIFY-015 | NotificationsController.GetNotifications | 集成测试 |
+| TC-NOTIFY-016 | NotificationRetryService（第1次重试） | 单元测试 |
+| TC-NOTIFY-017 | NotificationRetryService（3次后停止） | 单元测试 |
+| TC-NOTIFY-018 | NotificationRetryService（第2次成功） | 单元测试 |
+| TC-NOTIFY-019 | NotificationCompensationService | 集成测试 |
+
+### 28.5 非功能需求模块（TC-NFR-xxx）
+
+| 测试用例 | 后端实现位置 | 验证方式 |
+|----------|-------------|----------|
+| TC-NFR-001 | DatabaseIndexConfiguration | 性能测试 |
+| TC-NFR-002 | JwtAuthenticationConfiguration | 安全测试 |
+| TC-NFR-003 | PermissionPolicy | 安全测试 |
+| TC-NFR-004 | 跨浏览器兼容性 | UI测试 |
+| TC-NFR-005 | 响应式布局 | UI测试 |
+| TC-NFR-006 | MonitoringService | 运维验证 |
+| TC-NFR-007 | RequirementQueryHandler（索引效果） | 性能测试 |
+| TC-NFR-008 | BcryptPasswordHasher | 安全测试 |
+| TC-NFR-009 | AuditLogService | 集成测试 |
+| TC-NFR-010 | 异步队列 | 性能测试 |
+| TC-NFR-011 | 乐观锁 | 并发测试 |
+| TC-NFR-012 | 数据库连接池 | 性能测试 |
+| TC-NFR-013 | 日志规范 | 运维验证 |
+
+---
+
+## 29. 完整 API 一览表
+
+### 29.1 认证 API
+
+| 方法 | 端点 | 描述 | 权限 | 测试用例 |
+|------|------|------|------|----------|
+| POST | /api/auth/register | 用户自主注册 | 公开 | TC-AUTH-001~020 |
+| POST | /api/auth/login | 用户登录 | 公开 | TC-AUTH-021~028 |
+| POST | /api/auth/logout | 退出登录 | 需认证 | TC-AUTH-048~053 |
+| POST | /api/auth/refresh | 刷新Token | 公开 | TC-AUTH-048~053 |
+| POST | /api/auth/change-password | 已登录修改密码 | 需认证 | TC-AUTH-045~047 |
+| POST | /api/auth/first-login-password | 首次登录改密 | 需认证 | TC-AUTH-029~035 |
+| POST | /api/auth/forgot-password | 忘记密码-发送验证码 | 公开 | TC-AUTH-036~044 |
+| POST | /api/auth/reset-password | 忘记密码-重置密码 | 公开 | TC-AUTH-045~049 |
+| GET | /api/auth/me | 获取当前用户信息 | 需认证 | TC-AUTH-021 |
+| GET | /api/auth/login-page-info | 获取登录页信息 | 公开 | TC-AUTH-066~072 |
+
+### 29.2 需求管理 API
+
+| 方法 | 端点 | 描述 | 权限 | 测试用例 |
+|------|------|------|------|----------|
+| GET | /api/requirements | 获取需求列表 | 所有用户 | TC-REQ-001~013 |
+| GET | /api/requirements/{id} | 获取需求详情 | 所有用户 | TC-REQ-001 |
+| GET | /api/requirements/{id}/status-options | 获取状态选项 | 所有用户 | TC-FLOW-013 |
+| POST | /api/requirements | 创建需求 | 管理员 | TC-REQ-014~043 |
+| PUT | /api/requirements/{id} | 更新需求 | 管理员/跟进人 | TC-REQ-044~053 |
+| DELETE | /api/requirements/{id} | 删除需求 | 管理员 | TC-REQ-054~056 |
+| PUT | /api/requirements/{id}/status | 更新需求状态 | 管理员 | TC-FLOW-001~020 |
+| GET | /api/requirements/export | 导出需求列表 | 管理员 | ISS-09 |
+
+### 29.3 项目管理 API
+
+| 方法 | 端点 | 描述 | 权限 | 测试用例 |
+|------|------|------|------|----------|
+| GET | /api/projects | 获取项目列表 | 管理员 | TC-PROJ-009~010 |
+| GET | /api/projects/{id} | 获取项目详情 | 管理员 | TC-PROJ-001 |
+| POST | /api/projects | 创建项目 | 管理员 | TC-PROJ-001~004,011~016 |
+| PUT | /api/projects/{id} | 更新项目 | 管理员 | TC-PROJ-003,008 |
+| DELETE | /api/projects/{id} | 删除项目 | 管理员 | TC-PROJ-004~005,016 |
+
+### 29.4 机器人配置 API
+
+| 方法 | 端点 | 描述 | 权限 | 测试用例 |
+|------|------|------|------|----------|
+| GET | /api/robots | 获取机器人列表 | 管理员 | TC-BOT-010 |
+| GET | /api/robots/{id} | 获取机器人详情 | 管理员 | TC-BOT-001 |
+| POST | /api/robots | 创建机器人 | 管理员 | TC-BOT-001~004,012~013 |
+| PUT | /api/robots/{id} | 更新机器人 | 管理员 | TC-BOT-005,009 |
+| DELETE | /api/robots/{id} | 删除机器人 | 管理员 | TC-BOT-008,011 |
+| POST | /api/robots/{id}/test | 测试机器人连接 | 管理员 | TC-BOT-001~004 |
+
+### 29.5 通知管理 API
+
+| 方法 | 端点 | 描述 | 权限 | 测试用例 |
+|------|------|------|------|----------|
+| GET | /api/notifications | 获取通知日志列表 | 管理员 | TC-NOTIFY-015 |
+| GET | /api/notifications/{id} | 获取通知详情 | 管理员 | TC-NOTIFY-013~014 |
+| POST | /api/notifications/{id}/retry | 手动重试 | 管理员 | TC-NOTIFY-016~018 |
+| GET | /api/notifications/stats | 获取通知统计 | 管理员 | TC-NOTIFY-013 |
+
+### 29.6 用户管理 API
+
+| 方法 | 端点 | 描述 | 权限 | 测试用例 |
+|------|------|------|------|----------|
+| GET | /api/users | 获取用户列表 | 管理员 | TC-USER-001 |
+| GET | /api/users/{id} | 获取用户详情 | 所有用户 | TC-USER-001 |
+| POST | /api/users | 创建用户 | 管理员 | TC-USER-001~002 |
+| PUT | /api/users/{id} | 更新用户 | 管理员 | TC-USER-002,004 |
+| DELETE | /api/users/{id} | 删除用户 | 管理员 | TC-USER-003,006~009 |
+| GET | /api/users/followers | 获取跟进人选项 | 管理员 | TC-USER-006 |
+
+---
+
 如需进一步细化某个模块的实现细节，请告知。
 
 ---
