@@ -182,6 +182,7 @@ public enum UserRole
 |------|------|------|------|
 | GET | /api/requirements | 获取需求列表（支持筛选、分页、排序） | 所有用户 |
 | GET | /api/requirements/{id} | 获取需求详情 | 所有用户 |
+| GET | /api/requirements/{id}/status-options | 获取状态切换选项（相邻状态） | 所有用户 |
 | POST | /api/requirements | 创建需求 | 管理员 |
 | PUT | /api/requirements/{id} | 更新需求 | 管理员/跟进人 |
 | DELETE | /api/requirements/{id} | 删除需求 | 管理员 |
@@ -243,10 +244,11 @@ public enum UserRole
 
 ### 5.1 状态流转服务
 
+#### 5.1.1 状态机核心实现
+
 ```csharp
 public class RequirementStateMachine
 {
-    // 定义合法流转路径
     private static readonly Dictionary<RequirementStatus, RequirementStatus[]> 
         ValidTransitions = new()
     {
@@ -271,6 +273,217 @@ public class RequirementStateMachine
     {
         return ValidTransitions.TryGetValue(current, out var targets) 
                && targets.Length > 0 ? targets[0] : null;
+    }
+}
+```
+
+#### 5.1.2 状态切换选项查询 API
+
+> 对应测试用例：TC-FLOW-013（前端下拉框仅显示前后相邻合法状态）
+
+```csharp
+/// <summary>
+/// 获取指定需求可切换的状态选项
+/// 用于前端状态下拉框动态展示
+/// </summary>
+public class GetNextStatusOptionsQueryHandler : IRequestHandler<GetNextStatusOptionsQuery, Result<StatusOptionsDto>>
+{
+    public async Task<Result<StatusOptionsDto>> Handle(GetNextStatusOptionsQuery query)
+    {
+        var requirement = await _requirementRepo.GetByIdAsync(query.RequirementId);
+        if (requirement == null)
+            return Result.NotFound("需求不存在");
+
+        var currentStatus = requirement.Status;
+        var stateMachine = new RequirementStateMachine();
+
+        var validTargets = stateMachine.GetValidNextStatuses(currentStatus);
+        var canRevert = CanRevertToPreviousStatus(currentStatus);
+
+        var options = new List<StatusOptionDto>();
+        
+        // 逆向可选项（仅一个）
+        if (canRevert && TryGetPreviousStatus(currentStatus, out var prevStatus))
+        {
+            options.Add(new StatusOptionDto
+            {
+                Value = (int)prevStatus,
+                Label = GetStatusName(prevStatus),
+                Direction = "revert"
+            });
+        }
+
+        // 正向可选项（仅一个）
+        if (validTargets.Length > 0)
+        {
+            options.Add(new StatusOptionDto
+            {
+                Value = (int)validTargets[0],
+                Label = GetStatusName(validTargets[0]),
+                Direction = "forward"
+            });
+        }
+
+        return Result.Success(new StatusOptionsDto
+        {
+            CurrentStatus = (int)currentStatus,
+            CurrentStatusName = GetStatusName(currentStatus),
+            Options = options,
+            IsTerminalStatus = currentStatus == RequirementStatus.Launched
+        });
+    }
+
+    private bool CanRevertToPreviousStatus(RequirementStatus current) => current switch
+    {
+        RequirementStatus.Confirmed => true,     // 可回退到待确认
+        RequirementStatus.PendingQuote => true,  // 可回退到已确认
+        RequirementStatus.Quoted => true,        // 可回退到待报价
+        RequirementStatus.PendingDev => true,    // 可回退到已报价
+        RequirementStatus.InDev => true,         // 可回退到待开发
+        RequirementStatus.InTest => true,        // 可回退到开发中
+        RequirementStatus.AcceptedPendingLaunch => true, // 可回退到测试中
+        _ => false
+    };
+
+    private bool TryGetPreviousStatus(RequirementStatus current, out RequirementStatus previous)
+    {
+        previous = current switch
+        {
+            RequirementStatus.Confirmed => RequirementStatus.PendingConfirm,
+            RequirementStatus.PendingQuote => RequirementStatus.Confirmed,
+            RequirementStatus.Quoted => RequirementStatus.PendingQuote,
+            RequirementStatus.PendingDev => RequirementStatus.Quoted,
+            RequirementStatus.InDev => RequirementStatus.PendingDev,
+            RequirementStatus.InTest => RequirementStatus.InDev,
+            RequirementStatus.AcceptedPendingLaunch => RequirementStatus.InTest,
+            _ => RequirementStatus.PendingConfirm
+        };
+        return CanRevertToPreviousStatus(current);
+    }
+}
+
+public class StatusOptionsDto
+{
+    public int CurrentStatus { get; set; }
+    public string CurrentStatusName { get; set; }
+    public List<StatusOptionDto> Options { get; set; }
+    public bool IsTerminalStatus { get; set; }  // 终态不可变更
+}
+
+public class StatusOptionDto
+{
+    public int Value { get; set; }
+    public string Label { get; set; }
+    public string Direction { get; set; }  // "forward" 或 "revert"
+}
+
+/// <summary>
+/// GET /api/requirements/{id}/status-options
+/// 获取需求的状态切换选项
+/// </summary>
+```
+
+#### 5.1.3 终态需求编辑约束
+
+> 对应测试用例：TC-FLOW-010、TC-FLOW-012
+
+```csharp
+/// <summary>
+/// 已上线（终态）需求编辑约束
+/// 终态需求仅允许编辑备注字段，其他字段只读
+/// </summary>
+public class UpdateRequirementCommandHandler
+{
+    public async Task<Result> Handle(UpdateRequirementCommand command)
+    {
+        var requirement = await _requirementRepo.GetByIdAsync(command.Id);
+        
+        // 终态约束检查
+        if (requirement.Status == RequirementStatus.Launched)
+        {
+            // 仅允许更新备注字段
+            if (!string.IsNullOrEmpty(command.Remark) && command.Remark != requirement.Remark)
+            {
+                requirement.Remark = command.Remark;
+                requirement.UpdatedAt = DateTime.UtcNow;
+                await _requirementRepo.UpdateAsync(requirement);
+                return Result.Success(requirement);
+            }
+            
+            // 尝试修改其他字段，返回错误
+            if (HasOtherFieldChanges(requirement, command))
+            {
+                return Result.BadRequest("已上线需求不可编辑，请查看需求详情");
+            }
+        }
+        
+        // 正常更新逻辑...
+        return await NormalUpdateAsync(command, requirement);
+    }
+
+    private bool HasOtherFieldChanges(Requirement req, UpdateRequirementCommand cmd)
+    {
+        return req.Name != cmd.Name ||
+               req.Progress != cmd.Progress ||
+               req.FollowerId != cmd.FollowerId ||
+               req.Status != cmd.Status ||
+               req.PlanStartDate != cmd.PlanStartDate ||
+               req.PlanTestDate != cmd.PlanTestDate ||
+               req.PlanLaunchDate != cmd.PlanLaunchDate ||
+               !string.IsNullOrEmpty(cmd.Price.ToString());  // 非管理员不可见Price
+    }
+}
+
+/// <summary>
+/// 已上线需求详情返回标记
+/// 前端据此决定哪些字段可编辑
+/// </summary>
+public class RequirementDetailDto
+{
+    // ... 其他字段
+    public bool IsTerminalStatus { get; set; }  // 是否终态
+    public bool CanEditRemarkOnly { get; set; } // 是否仅可编辑备注
+}
+```
+
+#### 5.1.4 状态自动逻辑
+
+| 触发条件 | 自动操作 |
+|----------|----------|
+| 状态变更为"已确认"及以上 | `IsConfirmed = true` |
+| 状态回退为"待确认" | `IsConfirmed = false` |
+| 状态变更为"测试中" | 自动填充 `ActualTestDate` |
+| 状态变更为"已上线" | 自动填充 `ActualLaunchDate` |
+
+```csharp
+/// <summary>
+/// 状态变更时的自动逻辑处理
+/// </summary>
+public class StatusTransitionHandler
+{
+    public void ApplyAutoLogic(Requirement requirement, RequirementStatus newStatus, RequirementStatus oldStatus)
+    {
+        // IsConfirmed 标志联动
+        if (newStatus >= RequirementStatus.Confirmed)
+        {
+            requirement.IsConfirmed = true;
+        }
+        else if (newStatus == RequirementStatus.PendingConfirm)
+        {
+            requirement.IsConfirmed = false;
+        }
+
+        // ActualTestDate 自动填充
+        if (newStatus == RequirementStatus.InTest && !requirement.ActualTestDate.HasValue)
+        {
+            requirement.ActualTestDate = DateTime.UtcNow;
+        }
+
+        // ActualLaunchDate 自动填充
+        if (newStatus == RequirementStatus.Launched && !requirement.ActualLaunchDate.HasValue)
+        {
+            requirement.ActualLaunchDate = DateTime.UtcNow;
+        }
     }
 }
 ```
@@ -311,7 +524,121 @@ public async Task<Result> UpdateRequirement(int id, UpdateRequirementDto dto, in
 | 状态变更为"测试中" | 自动填充 `ActualTestDate` |
 | 状态变更为"已上线" | 自动填充 `ActualLaunchDate` |
 
-### 5.4 企业微信通知服务
+#### 5.4 企业微信通知服务
+
+> 对应测试用例：TC-NOTIFY-001 ~ TC-NOTIFY-005（状态变更通知）
+
+##### 5.4.1 通知发送延迟队列设计
+
+> 对应测试用例：TC-NOTIFY-003（通知延迟要求：≤5分钟）
+
+```csharp
+/// <summary>
+/// 通知发送队列服务
+/// 状态变更后，将通知任务加入延迟队列，5分钟内发送
+/// 使用内存队列 + 后台任务处理，支持重启后任务恢复
+/// </summary>
+public interface INotificationQueue
+{
+    Task EnqueueAsync(NotificationJob job);
+    Task<NotificationJob?> DequeueAsync(CancellationToken ct);
+    Task MarkAsProcessedAsync(int jobId);
+    Task MarkAsFailedAsync(int jobId, string errorMessage);
+}
+
+public class NotificationJob
+{
+    public int Id { get; set; }
+    public int RequirementId { get; set; }
+    public NotificationType Type { get; set; }
+    public RequirementStatus? OldStatus { get; set; }
+    public RequirementStatus? NewStatus { get; set; }
+    public DateTime EnqueuedAt { get; set; }
+    public DateTime ScheduledAt { get; set; }  // 计划发送时间（入队后5分钟）
+    public int RetryCount { get; set; }
+    public string? ErrorMessage { get; set; }
+}
+
+public class NotificationQueueBackgroundService : BackgroundService
+{
+    private readonly INotificationQueue _queue;
+    private readonly IServiceProvider _serviceProvider;
+    private readonly TimeSpan _processInterval = TimeSpan.FromSeconds(10);
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            var job = await _queue.DequeueAsync(stoppingToken);
+            
+            if (job != null)
+            {
+                await ProcessJobAsync(job, stoppingToken);
+            }
+
+            await Task.Delay(_processInterval, stoppingToken);
+        }
+    }
+
+    private async Task ProcessJobAsync(NotificationJob job, CancellationToken ct)
+    {
+        if (DateTime.UtcNow < job.ScheduledAt)
+        {
+            // 未到发送时间，放回队列
+            return;
+        }
+
+        using var scope = _serviceProvider.CreateScope();
+        var notifier = scope.ServiceProvider.GetRequiredService<INotificationService>();
+
+        var result = await notifier.SendNotificationAsync(job);
+
+        if (result.IsSuccess)
+        {
+            await _queue.MarkAsProcessedAsync(job.Id);
+        }
+        else
+        {
+            if (job.RetryCount < 3)
+            {
+                await _queue.MarkAsFailedAsync(job.Id, result.ErrorMessage);
+            }
+            else
+            {
+                await _queue.MarkAsProcessedAsync(job.Id);
+            }
+        }
+    }
+}
+```
+
+##### 5.4.2 状态变更通知触发
+
+```csharp
+public class RequirementStatusChangedEventHandler
+{
+    private readonly INotificationQueue _queue;
+
+    public async Task HandleAsync(Requirement requirement, RequirementStatus oldStatus, RequirementStatus newStatus)
+    {
+        if (requirement.RobotId == null || !requirement.Robot?.IsEnabled == true)
+            return;  // 无有效机器人，跳过
+
+        var job = new NotificationJob
+        {
+            RequirementId = requirement.Id,
+            Type = NotificationType.StatusChange,
+            OldStatus = oldStatus,
+            NewStatus = newStatus,
+            EnqueuedAt = DateTime.UtcNow,
+            ScheduledAt = DateTime.UtcNow.AddMinutes(5),  // 5分钟内发送
+            RetryCount = 0
+        };
+
+        await _queue.EnqueueAsync(job);
+    }
+}
+```
 
 ```csharp
 public class WeChatWorkNotifier : INotificationService
@@ -455,6 +782,82 @@ public class ReminderService : BackgroundService
 | 通知日志查看 | ✅ | ❌ | ❌ |
 
 ### 6.2 权限实现
+
+##### 6.2.1 报价字段权限控制
+
+> 对应测试用例：TC-REQ-041、TC-REQ-042、TC-REQ-043
+
+```csharp
+/// <summary>
+/// 报价字段权限控制策略
+/// 仅管理员可查看和编辑报价字段
+/// </summary>
+public class PriceFieldPermissionPolicy
+{
+    public bool CanViewPrice(UserRole role) => role == UserRole.Admin;
+    
+    public bool CanEditPrice(UserRole role) => role == UserRole.Admin;
+    
+    /// <summary>
+    /// DTO 处理：根据用户角色屏蔽报价字段
+    /// </summary>
+    public void MaskPriceField(RequirementDto dto, UserRole role)
+    {
+        if (role != UserRole.Admin)
+        {
+            dto.Price = null;  // 非管理员不可见报价
+            dto.PriceDisplay = "--";  // 显示占位符
+        }
+    }
+}
+
+/// <summary>
+/// 需求列表/详情 DTO
+/// </summary>
+public class RequirementDto
+{
+    public int Id { get; set; }
+    public string Name { get; set; }
+    public string RequirementNo { get; set; }
+    public RequirementStatus Status { get; set; }
+    public string StatusName { get; set; }
+    public int Progress { get; set; }
+    
+    // 报价字段 - 根据角色决定是否返回
+    public decimal? Price { get; set; }  // 仅管理员返回实际值
+    public string PriceDisplay { get; set; } = "--";  // 非管理员显示 "--"
+    
+    // ... 其他字段
+}
+
+/// <summary>
+/// 需求编辑请求 DTO
+/// </summary>
+public class UpdateRequirementDto
+{
+    // Price 字段：非管理员不可提交，否则后端校验不通过
+    public decimal? Price { get; set; }
+}
+
+/// <summary>
+/// 更新需求权限校验
+/// </summary>
+public class UpdateRequirementCommandValidator
+{
+    public ValidationResult Validate(UpdateRequirementDto dto, User currentUser)
+    {
+        // 非管理员尝试修改报价
+        if (currentUser.Role != UserRole.Admin && dto.Price != null)
+        {
+            return ValidationResult.Fail("您没有权限修改报价字段");
+        }
+        
+        return ValidationResult.Success();
+    }
+}
+```
+
+##### 6.2.2 需求操作权限校验
 
 ```csharp
 public class RequirementAuthorizationHandler : 
@@ -2048,9 +2451,155 @@ public class GetProjectsQueryHandler : IRequestHandler<GetProjectsQuery, Result<
 
 ---
 
-## 24. 机器人配置增强设计
+##### 24. 机器人配置增强设计
 
-### 24.1 Webhook URL 校验
+> 对应测试用例：TC-BOT-001 ~ TC-BOT-015
+
+#### 24.1 Webhook URL 校验
+
+> 对应测试用例：TC-BOT-012、TC-BOT-013
+
+```csharp
+public class WebhookUrlValidator
+{
+    private const string WeChatWorkDomain = "qyapi.weixin.qq.com";
+
+    public (bool isValid, string? errorMessage) Validate(string? webhookUrl)
+    {
+        if (string.IsNullOrEmpty(webhookUrl))
+            return (false, "请填写Webhook地址");
+
+        if (!Uri.TryCreate(webhookUrl, UriKind.Absolute, out var uri))
+            return (false, "请输入有效的Webhook地址");
+
+        if (!webhookUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            return (false, "Webhook地址必须为HTTPS");
+
+        if (!webhookUrl.Contains(WeChatWorkDomain))
+            return (false, "Webhook地址格式不正确");
+
+        return (true, null);
+    }
+
+    /// <summary>
+    /// 测试连接（发送测试消息）
+    /// </summary>
+    public async Task<(bool isSuccess, string? errorMessage)> TestConnectionAsync(string webhookUrl)
+    {
+        try
+        {
+            var response = await _httpClient.PostAsJsonAsync(webhookUrl, new
+            {
+                msgtype = "text",
+                text = new 
+                { 
+                    content = $"【测试消息】这是一条来自需求跟踪管理系统的测试消息，时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}" 
+                }
+            });
+
+            if (response.IsSuccessStatusCode)
+                return (true, null);
+
+            var errorContent = await response.Content.ReadAsStringAsync();
+            return (false, $"请求失败：{errorContent}");
+        }
+        catch (HttpRequestException ex)
+        {
+            return (false, $"连接失败：{ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            return (false, $"测试失败：{ex.Message}");
+        }
+    }
+}
+```
+
+#### 24.2 机器人测试连接
+
+> 对应测试用例：TC-BOT-001、TC-BOT-004
+
+```csharp
+public class TestRobotConnectionCommandHandler : IRequestHandler<TestRobotConnectionCommand, Result<bool>>
+{
+    public async Task<Result<bool>> Handle(TestRobotConnectionCommand command)
+    {
+        var validation = _webhookValidator.Validate(command.WebhookUrl);
+        if (!validation.isValid)
+            return Result.BadRequest(validation.errorMessage);
+
+        // 强制先测试连接才能保存
+        var (isSuccess, errorMessage) = await _webhookValidator.TestConnectionAsync(command.WebhookUrl);
+        
+        if (!isSuccess)
+            return Result.BadRequest($"测试连接失败：{errorMessage}");
+
+        return Result.Success(true);
+    }
+}
+
+/// <summary>
+/// POST /api/robots/test
+/// 测试机器人连接（创建/编辑时调用）
+/// </summary>
+public class TestRobotConnectionCommand : IRequest<Result<bool>>
+{
+    public string WebhookUrl { get; set; }
+}
+```
+
+#### 24.3 机器人删除级联处理
+
+> 对应测试用例：TC-BOT-008
+
+```csharp
+public class DeleteRobotCommandHandler : IRequestHandler<DeleteRobotCommand, Result>
+{
+    public async Task<Result> Handle(DeleteRobotCommand command)
+    {
+        var robot = await _robotRepo.GetByIdAsync(command.Id);
+        if (robot == null)
+            return Result.NotFound("机器人不存在");
+
+        // 查询关联的需求数量
+        var associatedRequirements = await _requirementRepo.GetByRobotIdAsync(command.Id);
+        var count = associatedRequirements.Count;
+
+        if (count > 0)
+        {
+            // 清除所有关联需求的 RobotId
+            foreach (var req in associatedRequirements)
+            {
+                req.RobotId = null;
+                await _requirementRepo.UpdateAsync(req);
+            }
+
+            // 记录日志
+            await _notificationLogRepo.AddRangeAsync(associatedRequirements.Select(r => new NotificationLog
+            {
+                RequirementId = r.Id,
+                Type = NotificationType.RobotDeleted,
+                Status = NotificationStatus.Success,
+                ErrorMessage = $"关联机器人「{robot.Name}」已被删除",
+                CreatedAt = DateTime.UtcNow
+            }));
+        }
+
+        await _robotRepo.DeleteAsync(command.Id);
+
+        return Result.Success(count > 0 
+            ? $"机器人已删除，{count} 条需求的关联机器人已自动清除"
+            : "机器人已删除");
+    }
+}
+
+/// <summary>
+/// DELETE /api/robots/{id}
+/// 删除机器人
+/// </summary>
+```
+
+#### 24.4 机器人启用/禁用
 
 ```csharp
 public class WebhookUrlValidator
@@ -2460,9 +3009,19 @@ public enum AuditAction
 | TC-AUTH-061 ~ 066 | 管理员初始化 | 初始管理员创建、强制改密 |
 | TC-AUTH-067 ~ 072 | UI 交互 | 前端表单校验 |
 | TC-BOT-001 ~ 015 | 机器人配置 | RobotService、Webhook校验、测试连接 |
+| TC-BOT-008 | 机器人删除级联 | DeleteRobotCommandHandler 清除关联需求 |
 | TC-NOTIFY-001 ~ 019 | 通知管理 | WeChatWorkNotifier、重试服务、提醒服务 |
+| TC-NOTIFY-003 | 通知延迟发送 | NotificationQueueBackgroundService 5分钟延迟 |
 | TC-USER-001 ~ 009 | 用户管理 | UserService、删除约束、禁用联动 |
+| TC-USER-006 | 跟进人下拉过滤 | GetActiveUsersQueryHandler 仅返回启用用户 |
+| TC-USER-007 | 删除有跟进需求用户 | DeleteUserCommandHandler 阻止删除 |
+| TC-USER-009 | 禁用用户保留显示 | 查询时不过滤已禁用用户的显示 |
 | TC-PROJ-001 ~ 016 | 项目管理 | ProjectService、编码校验、删除约束 |
+| TC-REQ-041 ~ 043 | 报价字段权限 | PriceFieldPermissionPolicy 管理员专属 |
+| TC-FLOW-009 ~ 011 | 状态流转校验 | RequirementStateMachine.CanTransition 后端二次校验 |
+| TC-FLOW-012 | 终态备注编辑 | UpdateRequirementCommandHandler 仅允许编辑备注 |
+| TC-FLOW-013 | 状态选项API | GetNextStatusOptionsQuery 返回相邻状态 |
+| TC-FLOW-015 ~ 017 | 状态自动逻辑 | StatusTransitionHandler 自动填充字段 |
 | TC-NFR-001 ~ 009 | 非功能需求 | 性能优化、安全设计、操作日志 |
 
 ---
