@@ -1,0 +1,267 @@
+# ============================================
+# Coast.Api .gitignore
+# .NET 项目通用忽略规则
+# ============================================
+
+# ============================================
+# .NET 基础忽略
+# ============================================
+
+# Build results
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+
+# Build folders
+build/
+publish/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.userprefs
+*.rsuser
+
+# Visual Studio Code
+.vscode/
+
+# NuGet Packages
+*.nupkg
+*.snupkg
+**/[Pp]ackages/*
+
+# NuGet
+packages/
+*.nuget.props
+*.nuget.targets
+project.nuget.cache
+
+# ============================================
+# .NET Core / .NET 5+ 特定
+# ============================================
+
+# .NET SDK
+global.json
+restore/
+
+# Dotnet CLI
+DOTNET_CLI_TELEMETRY_OPTOUT
+DOTNET_SKIP_FIRST_TIME_EXPERIENCE
+
+# ============================================
+# Rider / IntelliJ
+# ============================================
+
+.idea/
+*.sln.iml
+*.rider.iml
+/modules
+
+# ============================================
+# 结果和日志
+# ============================================
+
+# Test Results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+TestResults/
+*.trx
+*.dotCover
+*.coverage
+*.Coverage
+coverage/
+[Pp]ackages/*/[Aa][Rr][Cc][Hh]ive/
+[Pp]ackages/*/[Cc]ontents/
+[Ll]og/
+[Ll]ogs/
+
+# Seq Logs
+seq-data/
+
+# ============================================
+# EF Core / 数据库迁移
+# ============================================
+
+*.mdf
+*.ldf
+*.bak
+*.sqldump
+
+# ============================================
+# 敏感配置
+# ============================================
+
+# Local configuration
+appsettings.local.json
+appsettings.*.local.json
+appsettings.*.Development.json
+*.local.settings.json
+
+# Connection strings (if not using secrets)
+connectionstrings.json
+
+# ============================================
+# 操作系统文件
+# ============================================
+
+# Windows
+Thumbs.db
+ehthumbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+*~
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# ============================================
+# 第三方工具和配置
+# ============================================
+
+# JetBrains Rider
+.idea/
+.idea/**/workspace.xml
+.idea/**/tasks.xml
+.idea/**/dictionaries
+.idea/**/dataSources
+.idea/**/dataSources.local.xml
+*.DotSettings.user
+
+# ReSharper
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.Cache
+
+# WebStorm
+.idea/
+
+# VS Code
+.vscode/
+
+# ============================================
+#容器和 Docker
+# ============================================
+
+docker-compose.override.yml
+.docker/
+
+# ============================================
+# Node.js (如果前端使用)
+# ============================================
+
+# Dependencies
+node_modules/
+npm-debug.log
+yarn-error.log
+yarn-debug.log
+
+# Build output
+wwwroot/
+dist/
+build/
+
+# ============================================
+# 证书和密钥（绝对不要提交）
+# ============================================
+
+*.pfx
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.jks
+*.keystore
+
+# Azure
+*.PublishProfiles
+*.azurePubxml
+
+# ============================================
+# TRAE IDE特定
+# ============================================
+
+.trae/
+*.trae*
+
+# ============================================
+# Claude Code 特定
+# ============================================
+
+.claude/
+claude.db
+*.claude*
+
+# ============================================
+# 其他忽略
+# ============================================
+
+# Autofac
+AutofacTemp/
+
+# Swagger/OpenAPI
+swagger/
+*.swagger*/
+OpenAPIs/
+
+# Health checks
+healthchecks-data/
+
+# ============================================
+# 项目特定（根据实际情况调整）
+# ============================================
+
+# 编译输出
+src/Coast.Api/src/**/bin/
+src/Coast.Api/src/**/obj/
+src.tests/**/bin/
+src.tests/**/obj/
+src.analyzers/**/bin/
+src.analyzers/**/obj/
+
+# JetBrains Rider 项目文件
+src/**/[Rr]ider/
+*.DotSettings
+
+# SourceLink (如果使用)
+*.sourcelink.json
+
+# ============================================
+# 调试和发布构建
+# ============================================
+
+# Debug
+Debug/
+debug/
+*.Debug
+*.debug
+
+# Release
+Release/
+release/
+*.Release
+*.release
+
+# ============================================
+# 注意：请勿删除以下目录（如果存在）
+# ============================================
+
+# !src/          - 源代码目录
+# !src/**/*.cs   - C# 源文件
+# !packages/ - 如果有本地 NuGet 包
