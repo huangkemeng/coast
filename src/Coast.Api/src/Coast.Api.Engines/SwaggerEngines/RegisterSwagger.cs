@@ -1,4 +1,3 @@
-﻿using System.Text.RegularExpressions;
 using Coast.Api.Engines.Bases;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.OpenApi.Models;
@@ -18,48 +17,20 @@ public class RegisterSwagger : IBuilderEngine
     {
         services.AddSwaggerGen(options =>
         {
-            typeof(SwaggerApiGroupNames).GetFields().Skip(1).ToList().ForEach(f =>
+            // 简化为单个 v1 文档
+            options.SwaggerDoc("v1", new OpenApiInfo
             {
-                var info = f.GetCustomAttributes(typeof(SwaggerGroupInfoAttribute), false)
-                    .OfType<SwaggerGroupInfoAttribute>().FirstOrDefault();
-                options.SwaggerDoc(f.Name, new OpenApiInfo
-                {
-                    Title = info?.Title,
-                    Version = info?.Version,
-                    Description = info?.Description
-                });
-                options.DescribeAllParametersInCamelCase();
+                Title = "需求跟踪管理系统 API",
+                Version = "v1",
+                Description = "需求跟踪管理系统 RESTful API"
             });
 
-            options.SwaggerDoc("Other", new OpenApiInfo
-            {
-                Title = "其他"
-            });
+            options.DescribeAllParametersInCamelCase();
 
-            options.DocInclusionPredicate((docName, apiDescription) =>
-            {
-                if (docName == "Other") return string.IsNullOrEmpty(apiDescription.GroupName);
-
-                if (docName == apiDescription.GroupName)
-                    return true;
-                if (apiDescription.GroupName == "*")
-                    if (Enum.TryParse(docName, out SwaggerApiGroupNames groupName))
-                    {
-                        var fieldInfo = typeof(SwaggerApiGroupNames).GetField(docName)!;
-                        var info = fieldInfo.GetCustomAttributes(typeof(SwaggerGroupInfoAttribute), false)
-                            .OfType<SwaggerGroupInfoAttribute>().FirstOrDefault();
-                        if (info != null && info.MatchRule != null && apiDescription.RelativePath != null)
-                        {
-                            var matched = new Regex(info.MatchRule).Match(apiDescription.RelativePath);
-                            return matched.Success;
-                        }
-                    }
-
-                return false;
-            });
+            // 添加 JWT Bearer 认证
             options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
             {
-                Description = @"JWT Authorization header using the Bearer scheme. \r\n\r\n 
+                Description = @"JWT Authorization header using the Bearer scheme. \r\n\r\n
                       Enter 'Bearer' [space] and then your token in the text input below.
                       \r\n\r\nExample: 'Bearer 12345abcdef'",
                 Name = "Authorization",
@@ -67,6 +38,7 @@ public class RegisterSwagger : IBuilderEngine
                 Type = SecuritySchemeType.ApiKey,
                 Scheme = "Bearer"
             });
+
             options.AddSecurityRequirement(new OpenApiSecurityRequirement
             {
                 {
@@ -84,10 +56,14 @@ public class RegisterSwagger : IBuilderEngine
                     new List<string>()
                 }
             });
+
+            // 加载 XML 注释
             var basePath = AppContext.BaseDirectory;
             options.IncludeXmlComments(Path.Combine(basePath, "Coast.Api.xml"), true);
             options.IncludeXmlComments(Path.Combine(basePath, "Coast.Api.Primary.xml"), true);
             options.IncludeXmlComments(Path.Combine(basePath, "Coast.Api.Infrastructure.xml"), true);
+
+            // 添加过滤器
             options.SchemaFilter<DisplayEnumDescFilter>();
             options.SchemaFilter<SwaggerSchemaPropertyFilter>();
             options.OperationFilter<SwaggerQueryPropertyFilter>();

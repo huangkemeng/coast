@@ -1,4 +1,4 @@
-﻿using Coast.Api.Engines.Bases;
+using Coast.Api.Engines.Bases;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Hosting;
 
@@ -20,14 +20,9 @@ public class UseSwagger : IAppEngine
             app.UseSwagger();
             app.UseSwaggerUI(options =>
             {
-                typeof(SwaggerApiGroupNames).GetFields().Skip(1).ToList().ForEach(f =>
-                {
-                    var info = f.GetCustomAttributes(typeof(SwaggerGroupInfoAttribute), false)
-                        .OfType<SwaggerGroupInfoAttribute>().FirstOrDefault();
-                    options.SwaggerEndpoint($"/swagger/{f.Name}/swagger.json",
-                        (info != null ? info.Title : f.Name) + "-" + app.Environment.EnvironmentName);
-                });
-                options.SwaggerEndpoint("/swagger/Other/swagger.json", "其他" + "-" + app.Environment.EnvironmentName);
+                // 简化为单个 v1 端点
+                options.SwaggerEndpoint("/swagger/v1/swagger.json",
+                    "需求跟踪管理系统 API - " + app.Environment.EnvironmentName);
             });
         }
     }
