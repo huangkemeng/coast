@@ -255,7 +255,7 @@ public class UserHandler : IUserContract
 
 ```csharp
 // 文件位置：Coast.Api/Controllers/UserController.cs
-public class UserController : WebBaseController
+public class UserController : BaseController
 {
     /// <summary>
     /// 用户登录
@@ -297,7 +297,7 @@ public class UserController : WebBaseController
 
 | 规则 | 说明 |
 |------|------|
-| **基类** | 继承 `WebBaseController` |
+| **基类** | 继承 `BaseController`（位于 `Coast.Api.Controllers.Bases`） |
 | **命名** | `{模块名}Controller`，如 `UserController` |
 | **方法名** | `{方法名}Async`，如 `LoginAsync` |
 | **返回类型** | `Task<IActionResult>` |
@@ -315,7 +315,377 @@ public class UserController : WebBaseController
 
 ---
 
-## 7. 数据实体规范（Coast.Api.Infrastructure）
+## 7. RESTful API 设计规范
+
+### 7.1 核心原则
+
+| 原则 | 说明 |
+|------|------|
+| **资源导向** | URL 表示资源，不是动作 |
+| **统一接口** | 使用标准 HTTP 方法表达 CRUD |
+| **无状态** | 每个请求包含所有必要信息 |
+| **分层系统** | 客户端不需要知道后端实现细节 |
+
+### 7.2 URL 命名规范
+
+| 资源类型 | URL 模式 | 示例 |
+|----------|----------|------|
+| 集合资源 | `/resources` | `/users`, `/requirements` |
+| 单个资源 | `/resources/{id}` | `/users/123`, `/requirements/456` |
+| 嵌套资源 | `/resources/{id}/sub-resources` | `/users/123/assignments` |
+| 动作（RPC 风格） | `/resources/{id}/actions` | `/users/123/reset-password` |
+
+**必须遵守的规则**：
+
+```csharp
+// ✅ 正确：使用复数名词、kebab-case
+[HttpGet("user-accounts")]
+[HttpGet("requirements/{id}")]
+
+// ❌ 错误：使用动词、单数名词、camelCase
+[HttpGet("getUsers")]
+[HttpGet("getUserById")]
+```
+
+| 规则 | 说明 | 示例 |
+|------|------|------|
+| 使用复数名词 | 资源名称用复数 | `/users` 而非 `/user` |
+| 使用 kebab-case | 小写 + 连字符 | `/user-accounts` |
+| 避免动词 | HTTP 方法即动作 | `GET /users/123` |
+| 嵌套限制 | 最多 2 层嵌套 | `/users/123/roles` |
+
+### 7.3 HTTP 方法使用规范
+
+| 方法 | 用途 | URL 示例 | 响应状态码 |
+|------|------|----------|-------------|
+| `GET` | 查询资源列表 | `GET /users` | 200 + 分页列表 |
+| `GET` | 查询单个资源 | `GET /users/123` | 200 + 资源 |
+| `POST` | 创建资源 | `POST /users` | 201 + 资源 |
+| `PUT` | 完整更新资源 | `PUT /users/123` | 200 + 资源 |
+| `PATCH` | 部分更新资源 | `PATCH /users/123` | 200 + 资源 |
+| `DELETE` | 删除资源 | `DELETE /users/123` | 204（无内容） |
+
+**控制器方法命名规范**：
+
+```csharp
+// ✅ 正确：使用 HTTP 方法对应的动词前缀
+[HttpGet]
+public async Task<IActionResult> GetUsersAsync() { }
+
+[HttpPost]
+public async Task<IActionResult> CreateUserAsync() { }
+
+[HttpPut("{id:long}")]
+public async Task<IActionResult> UpdateUserAsync() { }
+
+[HttpDelete("{id:long}")]
+public async Task<IActionResult> DeleteUserAsync() { }
+
+// ❌ 错误：使用 CRUD 动词
+[HttpGet]
+public async Task<IActionResult> QueryUsersAsync() { }  // 用 Get
+
+[HttpPost]
+public async Task<IActionResult> AddUserAsync() { }      // 用 Create
+```
+
+### 7.4 HTTP 状态码使用指南
+
+| 状态码 | 含义 | 使用场景 |
+|--------|------|----------|
+| **2xx 成功** | | |
+| 200 | OK | 查询成功、更新成功 |
+| 201 | Created | POST 创建新资源 |
+| 204 | No Content | DELETE 成功，无返回内容 |
+| **4xx 客户端错误** | | |
+| 400 | Bad Request | 参数校验失败、格式错误 |
+| 401 | Unauthorized | 未提供或无效的 Token |
+| 403 | Forbidden | 用户无权限执行操作 |
+| 404 | Not Found | 资源不存在 |
+| 409 | Conflict | 资源状态冲突（并发问题） |
+| 422 | Unprocessable Entity | 业务规则校验失败 |
+| **5xx 服务器错误** | | |
+| 500 | Internal Server Error | 系统异常 |
+| 503 | Service Unavailable | 服务不可用 |
+
+### 7.5 错误响应格式
+
+**标准错误响应结构**：
+
+```csharp
+public class ErrorResponse
+{
+    /// <summary>
+    /// 错误代码（业务码）
+    /// </summary>
+    public string Code { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 用户友好的错误消息
+    /// </summary>
+    public string Message { get; set; } = string.Empty;
+
+    /// <summary>
+    /// 详细错误信息（可选）
+    /// </summary>
+    public List<ErrorDetail>? Details { get; set; }
+
+    /// <summary>
+    /// 请求追踪 ID（用于日志关联）
+    /// </summary>
+    public string? TraceId { get; set; }
+}
+
+public class ErrorDetail
+{
+    /// <summary>
+    /// 错误字段（用于表单验证）
+    /// </summary>
+    public string? Field { get; set; }
+
+    /// <summary>
+    /// 字段级错误消息
+    /// </summary>
+    public string Error { get; set; } = string.Empty;
+}
+```
+
+**JSON 响应示例**：
+
+```json
+// 400 - 参数验证失败
+{
+  "code": "VALIDATION_ERROR",
+  "message": "请求参数校验失败",
+  "details": [
+    { "field": "username", "error": "用户名不能为空" },
+    { "field": "email", "error": "邮箱格式不正确" }
+  ],
+  "traceId": "abc123-def456"
+}
+
+// 404 - 资源不存在
+{
+  "code": "USER_NOT_FOUND",
+  "message": "指定的用户不存在",
+  "traceId": "abc123-def456"
+}
+
+// 422 - 业务规则错误
+{
+  "code": "REQUIREMENT_STATUS_INVALID",
+  "message": "需求状态不允许此操作",
+  "details": [
+    { "field": "status", "error": "当前状态为『已上线』，不允许回退" }
+  ],
+  "traceId": "abc123-def456"
+}
+```
+
+### 7.6 成功响应格式
+
+**单资源响应**：
+
+```json
+{
+  "id": 123,
+  "username": "admin",
+  "email": "admin@example.com",
+  "createdAt": "2026-01-01T00:00:00Z"
+}
+```
+
+**分页列表响应**：
+
+```json
+{
+  "items": [
+    { "id": 1, "username": "user1" },
+    { "id": 2, "username": "user2" }
+  ],
+  "totalCount": 100,
+  "page": 1,
+  "pageSize": 20,
+  "totalPages": 5
+}
+```
+
+**创建成功响应（201）**：
+
+```json
+{
+  "id": 123,
+  "username": "newuser",
+  "createdAt": "2026-01-01T00:00:00Z"
+}
+```
+
+### 7.7 查询参数规范
+
+| 参数 | 用途 | 示例 |
+|------|------|------|
+| `page` | 页码 | `GET /users?page=2` |
+| `pageSize` | 每页数量 | `GET /users?pageSize=20` |
+| `sort` | 排序字段 | `GET /users?sort=createdAt` |
+| `order` | 排序方向 | `GET /users?order=desc` |
+| `search` | 搜索关键字 | `GET /users?search=keyword` |
+| `{field}` | 精确过滤 | `GET /requirements?status=open` |
+
+```csharp
+// ✅ 正确：查询列表带分页
+[HttpGet]
+public async Task<IActionResult> GetRequirementsAsync(
+    [FromQuery] int page = 1,
+    [FromQuery] int pageSize = 20,
+    [FromQuery] string? status = null,
+    CancellationToken cancellationToken = default)
+{
+    var request = new GetRequirementsRequest
+    {
+        Page = page,
+        PageSize = pageSize,
+        Status = status
+    };
+    var response = await Mediator.RequestAsync(request, cancellationToken);
+    return Ok(response);
+}
+```
+
+### 7.8 RESTful 控制器完整示例
+
+```csharp
+/// <summary>
+/// 用户管理
+/// </summary>
+[ApiController]
+[Route("users")]
+public class UserController : BaseController
+{
+    /// <summary>
+    /// 获取用户列表（分页）
+    /// </summary>
+    /// <param name="request">查询参数</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>用户列表</returns>
+    [HttpGet]
+    [ProducesResponseType(typeof(PaginatedResponse<UserDto>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetUsersAsync(
+        [FromQuery] GetUsersRequest request,
+        CancellationToken cancellationToken)
+    {
+        var response = await Mediator.RequestAsync(request, cancellationToken);
+        return Ok(response);
+    }
+
+    /// <summary>
+    /// 获取单个用户
+    /// </summary>
+    /// <param name="id">用户 ID</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>用户信息</returns>
+    [HttpGet("{id:long}")]
+    [ProducesResponseType(typeof(UserDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetUserAsync(
+        long id,
+        CancellationToken cancellationToken)
+    {
+        var request = new GetUserRequest { Id = id };
+        var response = await Mediator.RequestAsync(request, cancellationToken);
+        return Ok(response);
+    }
+
+    /// <summary>
+    /// 创建用户
+    /// </summary>
+    /// <param name="command">创建用户命令</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>创建的用户</returns>
+    [HttpPost]
+    [ProducesResponseType(typeof(UserDto), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status422UnprocessableEntity)]
+    public async Task<IActionResult> CreateUserAsync(
+        [FromBody] CreateUserCommand command,
+        CancellationToken cancellationToken)
+    {
+        var response = await Mediator.SendAsync(command, cancellationToken);
+        return CreatedAtAction(
+            nameof(GetUserAsync),
+            new { id = response.Id },
+            response);
+    }
+
+    /// <summary>
+    /// 更新用户
+    /// </summary>
+    /// <param name="id">用户 ID</param>
+    /// <param name="command">更新用户命令</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>更新后的用户</returns>
+    [HttpPut("{id:long}")]
+    [ProducesResponseType(typeof(UserDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status404NotFound)]
+    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> UpdateUserAsync(
+        long id,
+        [FromBody] UpdateUserCommand command,
+        CancellationToken cancellationToken)
+    {
+        command.Id = id;
+        var response = await Mediator.SendAsync(command, cancellationToken);
+        return Ok(response);
+    }
+
+    /// <summary>
+    /// 删除用户
+    /// </summary>
+    /// <param name="id">用户 ID</param>
+    /// <param name="cancellationToken">取消令牌</param>
+    /// <returns>无内容</returns>
+    [HttpDelete("{id:long}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(typeof(ErrorResponse), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DeleteUserAsync(
+        long id,
+        CancellationToken cancellationToken)
+    {
+        var command = new DeleteUserCommand { Id = id };
+        await Mediator.SendAsync(command, cancellationToken);
+        return NoContent();
+    }
+}
+```
+
+### 7.9 RESTful 禁止事项
+
+```csharp
+// ❌ 禁止：在 URL 中使用动词
+[HttpGet("getUserById/{id}")]        // 用 GET /users/{id}
+[HttpPost("createUser")]             // 用 POST /users
+[HttpPost("login")]                  // 用 POST /auth/login 或 POST /sessions
+
+// ❌ 禁止：使用非 RESTful 的动作路由
+[HttpPost("users/{id}/activate")]    // 用 PATCH /users/{id} + { "isActive": true }
+[HttpPost("users/{id}/deactivate")]  // 用 PATCH /users/{id} + { "isActive": false }
+
+// ❌ 禁止：嵌套过深（超过 2 层）
+[HttpGet("orgs/{orgId}/teams/{teamId}/members/{memberId}/roles")]
+// 改为：直接用 /team-members/{id} 或 /members/{id}/team-roles
+
+// ❌ 禁止：使用不正确的 HTTP 方法
+[HttpGet]                             // 永远不要用 GET 做删除
+public async Task<IActionResult> DeleteUserAsync()
+
+// ❌ 禁止：使用错误的响应状态码
+return Ok();                          // POST 创建成功后用 CreatedAtAction
+return Ok();                          // DELETE 成功后用 NoContent
+```
+
+---
+
+## 8. 数据实体规范（Coast.Api.Infrastructure）
 
 ### 7.1 实体基类
 
@@ -535,7 +905,7 @@ public interface IPaginated<T>
 | 示例 | 路径 |
 |------|------|
 | Handler 示例 | [LoginHandler.cs](src/Coast.Api/src/Coast.Api.Realization/Handlers/LoginHandler.cs) |
-| Controller 示例 | [UserController.cs](src/Coast.Api/src/Coast.Api.Controllers/UserController.cs) |
+| Controller 示例 | [UserController.cs](src/Coast.Api/src/Coast.Api/Controllers/UserController.cs) |
 | 契约接口示例 | [ICommandContract.cs](src/Coast.Api/src/Coast.Api.Primary/Contracts/Bases/ICommandContract.cs) |
 | 数据实体基类 | [IEntity.cs](src/Coast.Api/src/Coast.Api.Infrastructure/DataPersistence/DataEntityBases/IEntity.cs) |
 | 测试基类 | [TestBase.cs](src/Coast.Api/src.tests/Coast.Api.UnitTests/TestBase.cs) |
