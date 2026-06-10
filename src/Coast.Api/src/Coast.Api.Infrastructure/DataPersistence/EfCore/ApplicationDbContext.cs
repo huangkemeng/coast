@@ -38,5 +38,8 @@ public class ApplicationDbContext : DbContext
         base.OnModelCreating(modelBuilder);
         var mappingSource = this.GetService<IRelationalTypeMappingSource>();
         modelBuilder.LoadFromEntityConfigure(mappingSource);
+
+        // 配置实体关系
+        Entities.EntityRelationshipsConfig.ConfigureRelationships(modelBuilder);
     }
 }
