@@ -16,10 +16,20 @@ public class RegisterDbSet : IBuilderEngine
 
     public void Run()
     {
+        // 注册 DbContext
         _container.RegisterType<ApplicationDbContext>()
             .AsSelf()
             .As<DbContext>()
             .InstancePerLifetimeScope();
+
+        // 注册 DbContextFactory（用于创建独立作用域的 DbContext）
+        _container.Register(context =>
+        {
+            var options = context.Resolve<DbContextOptions<ApplicationDbContext>>();
+            return new ApplicationDbContextFactory(options);
+        }).As<IDbContextFactory<ApplicationDbContext>>()
+          .InstancePerLifetimeScope();
+
         var idbEntityType = typeof(IEfEntity<>);
         var idbEntityAssembly = idbEntityType.Assembly;
         var dbEntityTypes = idbEntityAssembly
@@ -38,5 +48,28 @@ public class RegisterDbSet : IBuilderEngine
                     .InstancePerLifetimeScope();
             }
         }
+    }
+}
+
+/// <summary>
+/// ApplicationDbContext 工厂
+/// </summary>
+public class ApplicationDbContextFactory : IDbContextFactory<ApplicationDbContext>
+{
+    private readonly DbContextOptions<ApplicationDbContext> _options;
+
+    public ApplicationDbContextFactory(DbContextOptions<ApplicationDbContext> options)
+    {
+        _options = options;
+    }
+
+    public ApplicationDbContext CreateDbContext()
+    {
+        return new ApplicationDbContext(_options);
+    }
+
+    public Task<ApplicationDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(CreateDbContext());
     }
 }

@@ -19,8 +19,20 @@ public class ApplicationDbContext : DbContext
         _settingOptions = settingOptions;
     }
 
+    /// <summary>
+    /// 用于 DbContextFactory 的构造函数
+    /// </summary>
+    public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options) : base(options)
+    {
+        _dbSetting = null!;
+        _settingOptions = null!;
+    }
+
     protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
     {
+        // 如果已经有配置（通过 DbContextOptions），跳过
+        if (optionsBuilder.IsConfigured) return;
+
         var connectString = _settingOptions.Scene == SceneOptions.Test
             ? _dbSetting.ConnectionStrings.IntegrationTest
             : _dbSetting.ConnectionStrings.WebApi;
