@@ -4,7 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Coast.Api.Controllers;
 
-public class UserController : WebBaseController
+public class UserController : BaseController
 {
     /// <summary>
     /// 用户登录
