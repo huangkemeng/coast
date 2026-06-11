@@ -38,7 +38,7 @@ public static class EfCoreQueryableExtensions
             Total = await orderByQuery.CountAsync(cancellationToken)
         };
         var query = pageable != null ? orderByQuery.Skip((pageable.Offset - 1) * pageable.PageSize).Take(pageable.PageSize) : orderByQuery;
-        
+
         paginatedResult.List = await query.ToListAsync(cancellationToken);
         return paginatedResult;
     }
@@ -53,7 +53,7 @@ public static class EfCoreQueryableExtensions
 
         var type = typeof(T);
         var parameterExpression = Expression.Parameter(type, "x");
-        Expression finalBody = null;
+        Expression? finalBody = null;
 
         foreach (var filter in filters)
         {
@@ -61,8 +61,8 @@ public static class EfCoreQueryableExtensions
             {
                 var prop = type.GetProperties().FirstOrDefault(e =>
                     e.Name.Equals(filter.FieldName, StringComparison.OrdinalIgnoreCase));
-                MemberExpression memberExpression = null;
-                Type propType = null;
+                MemberExpression? memberExpression = null;
+                Type? propType = null;
                 if (prop != null)
                 {
                     memberExpression = Expression.MakeMemberAccess(parameterExpression, prop);
@@ -79,9 +79,9 @@ public static class EfCoreQueryableExtensions
                     }
                 }
 
-                if (memberExpression != null)
+                if (memberExpression != null && propType != null)
                 {
-                    Expression body = null;
+                    Expression? body = null;
                     var valueExpression = Expression.Convert(Expression.Constant(filter.Value), propType);
                     switch (filter.Operator)
                     {
@@ -147,14 +147,14 @@ public static class EfCoreQueryableExtensions
 
         var type = typeof(T);
         var parameterExpression = Expression.Parameter(type, "x");
-        Expression finalBody = null;
+        Expression? finalBody = null;
 
         foreach (var filter in filters)
         {
             var prop = type.GetProperties().FirstOrDefault(e =>
                 e.Name.Equals(filter.FieldName, StringComparison.OrdinalIgnoreCase));
-            MemberExpression memberExpression = null;
-            Type propType = null;
+            MemberExpression? memberExpression = null;
+            Type? propType = null;
             if (prop != null)
             {
                 memberExpression = Expression.MakeMemberAccess(parameterExpression, prop);
@@ -171,9 +171,9 @@ public static class EfCoreQueryableExtensions
                 }
             }
 
-            if (memberExpression != null)
+            if (memberExpression != null && propType != null)
             {
-                Expression body = null;
+                Expression? body = null;
                 var valueExpression = Expression.Convert(Expression.Constant(filter.Value), propType);
                 switch (filter.Operator)
                 {
